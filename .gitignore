@@ -205,3 +205,26 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Monorepo app folders
+# React Native (mobile)
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+mobile/.kotlin/
+mobile/.metro-health-check*
+mobile/npm-debug.*
+mobile/yarn-debug.*
+mobile/yarn-error.*
+mobile/*.tsbuildinfo
+mobile/.env
+mobile/.env*.local
+mobile/ios/
+mobile/android/
+
+# FastAPI/Python (backend)
+backend/.venv/
+backend/__pycache__/
+backend/*.pyc
+backend/.env
