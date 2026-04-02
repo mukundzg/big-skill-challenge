@@ -13,7 +13,9 @@ import {
 } from 'react-native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
-import { AuthApiError, verifyCode } from '../api/auth';
+import { AuthApiError, isUserNotFoundError, verifyCode } from '../api/auth';
+import { markConsentsAccepted } from '../auth/consentStorage';
+import { clearSession, saveLoggedInSession } from '../auth/session';
 import type { RootStackParamList } from '../navigation/types';
 
 const LEN = 7;
@@ -106,12 +108,39 @@ export function VerifyCodeScreen({ navigation, route }: Props) {
     setError(null);
     setLoading(true);
     try {
-      await verifyCode(email, code);
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'Home' }],
-      });
+      const res = await verifyCode(email, code);
+      const normalizedEmail = (res.email ?? email).trim().toLowerCase();
+
+      if (res.is_active) {
+        await saveLoggedInSession({
+          email: normalizedEmail,
+          userId: res.user_id,
+          isActive: true,
+        });
+        const skipConsent = res.has_consent === true;
+        if (skipConsent) {
+          await markConsentsAccepted(normalizedEmail);
+        }
+        navigation.reset({
+          index: 0,
+          routes: [{ name: skipConsent ? 'QuizHome' : 'Home' }],
+        });
+      } else {
+        await clearSession();
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'InactiveAccount', params: { email: normalizedEmail } }],
+        });
+      }
     } catch (e) {
+      if (isUserNotFoundError(e)) {
+        await clearSession();
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Landing', params: { fromUserNotFound: true } }],
+        });
+        return;
+      }
       if (e instanceof AuthApiError) {
         setError(e.message);
       } else {
