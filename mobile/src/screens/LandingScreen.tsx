@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -10,21 +10,41 @@ import {
   View,
 } from 'react-native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
 import { AuthApiError, requestVerificationCode } from '../api/auth';
+import { shouldSkipConsentScreen } from '../auth/consentSync';
+import { isLoggedIn, loadSession } from '../auth/session';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Landing'>;
+  route: RouteProp<RootStackParamList, 'Landing'>;
 };
 
 function isValidEmail(s: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
 }
 
-export function LandingScreen({ navigation }: Props) {
+export function LandingScreen({ navigation, route }: Props) {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fromUserNotFound = route.params?.fromUserNotFound === true;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const session = await loadSession();
+      if (cancelled) return;
+      if (session != null && isLoggedIn(session)) {
+        const consentsOk = await shouldSkipConsentScreen(session.email);
+        navigation.replace(consentsOk ? 'QuizHome' : 'Home');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigation]);
 
   const onContinue = useCallback(async () => {
     setError(null);
@@ -55,6 +75,11 @@ export function LandingScreen({ navigation }: Props) {
     >
       <View style={styles.inner}>
         <Text style={styles.title}>Sign in</Text>
+        {fromUserNotFound && (
+          <Text style={styles.notice}>
+            We couldn&apos;t find your account. Enter your email below to register or sign in again.
+          </Text>
+        )}
         <Text style={styles.subtitle}>
           We&apos;ll email you a 7-character code to verify your address.
         </Text>
@@ -112,6 +137,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#18181b',
     marginBottom: 8,
+  },
+  notice: {
+    fontSize: 15,
+    lineHeight: 21,
+    color: '#92400e',
+    backgroundColor: '#fffbeb',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#fde68a',
   },
   subtitle: {
     fontSize: 16,

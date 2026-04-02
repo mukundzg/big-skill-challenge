@@ -1,18 +1,37 @@
 import { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { shouldSkipConsentScreen } from '../auth/consentSync';
+import { isLoggedIn, loadSession } from '../auth/session';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Splash'>;
 };
 
+/** On web, session load is so fast the splash was invisible; keep a minimum visible time. */
+const MIN_SPLASH_MS = 1200;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function SplashScreen({ navigation }: Props) {
   useEffect(() => {
-    const t = setTimeout(() => {
-      navigation.replace('Landing');
-    }, 2200);
-    return () => clearTimeout(t);
+    let cancelled = false;
+    (async () => {
+      const [session] = await Promise.all([loadSession(), delay(MIN_SPLASH_MS)]);
+      if (cancelled) return;
+      if (session != null && isLoggedIn(session)) {
+        const consentsOk = await shouldSkipConsentScreen(session.email);
+        navigation.replace(consentsOk ? 'QuizHome' : 'Home');
+      } else {
+        navigation.replace('Landing', {});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [navigation]);
 
   return (

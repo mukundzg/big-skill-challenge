@@ -29,8 +29,13 @@ def send_email(to_addr: str, subject: str, body: str) -> None:
         return
 
     host = os.environ.get("SMTP_HOST")
-    if not host and provider == "inbox":
-        host = "smtp.inbox.com"
+    if not host:
+        # Default SMTP hosts for supported providers.
+        # This keeps configuration simple: you can just set SMTP_PROVIDER=gmail/inbox.
+        if provider == "inbox":
+            host = "smtp.inbox.com"
+        elif provider == "gmail":
+            host = "smtp.gmail.com"
     if not host:
         print(f"[dev] verification code for {to_addr}: {body.strip()}")
         return

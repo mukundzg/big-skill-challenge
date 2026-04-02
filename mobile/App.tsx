@@ -7,6 +7,10 @@ import { HomeScreen } from './src/screens/HomeScreen';
 import { LandingScreen } from './src/screens/LandingScreen';
 import { SplashScreen } from './src/screens/SplashScreen';
 import { VerifyCodeScreen } from './src/screens/VerifyCodeScreen';
+import { InactiveAccountScreen } from './src/screens/InactiveAccountScreen';
+import { QuizHomeScreen } from './src/screens/QuizHomeScreen';
+import { QuizCompleteScreen } from './src/screens/QuizCompleteScreen';
+import { QuizPlayScreen } from './src/screens/QuizPlayScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -43,6 +47,26 @@ export default function App() {
             name="Home"
             component={HomeScreen}
             options={{ headerShown: false, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizHome"
+            component={QuizHomeScreen}
+            options={{ title: 'Quiz', headerShown: true, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizPlay"
+            component={QuizPlayScreen}
+            options={{ title: 'Question', headerShown: true, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizComplete"
+            component={QuizCompleteScreen}
+            options={{ title: 'Complete', headerShown: true, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="InactiveAccount"
+            component={InactiveAccountScreen}
+            options={{ title: 'Account', headerShown: true }}
           />
         </Stack.Navigator>
       </NavigationContainer>
