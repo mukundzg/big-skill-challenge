@@ -18,3 +18,12 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 # SMTP_HOST=smtp.inbox.com
 # SMTP_PORT=587
 # SMTP_SECURITY=starttls
+
+# Mailjet API setup
+# In .env:
+# VERIFICATION_EMAIL_BYPASS=false
+# SMTP_PROVIDER=mailjet
+# MJ_APIKEY_PUBLIC=<your mailjet public key>
+# MJ_APIKEY_PRIVATE=<your mailjet private key>
+# MJ_FROM_EMAIL=<your verified sender email>
+# MJ_FROM_NAME=<sender name shown to users>

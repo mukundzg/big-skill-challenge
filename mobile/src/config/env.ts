@@ -9,3 +9,6 @@ const stripTrailingSlash = (url: string) => url.replace(/\/$/, '');
 export const API_BASE_URL = stripTrailingSlash(
   process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8000',
 );
+
+// Metro/Expo inlines EXPO_PUBLIC_* at bundle time from `mobile/.env`
+console.log('API_BASE_URL=', API_BASE_URL);
