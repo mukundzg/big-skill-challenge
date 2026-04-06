@@ -10,7 +10,7 @@ type Props = {
 export function SplashScreen({ navigation }: Props) {
   useEffect(() => {
     const t = setTimeout(() => {
-      navigation.replace('Landing');
+      navigation.replace('Home');
     }, 2200);
     return () => clearTimeout(t);
   }, [navigation]);
