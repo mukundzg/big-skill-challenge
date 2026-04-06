@@ -11,6 +11,7 @@ import { InactiveAccountScreen } from './src/screens/InactiveAccountScreen';
 import { QuizHomeScreen } from './src/screens/QuizHomeScreen';
 import { QuizCompleteScreen } from './src/screens/QuizCompleteScreen';
 import { QuizPlayScreen } from './src/screens/QuizPlayScreen';
+import { QuizPrepareScreen } from './src/screens/QuizPrepareScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -52,6 +53,11 @@ export default function App() {
             name="QuizHome"
             component={QuizHomeScreen}
             options={{ title: 'Quiz', headerShown: true, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizPrepare"
+            component={QuizPrepareScreen}
+            options={{ headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
             name="QuizPlay"

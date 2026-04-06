@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthApiError, isUserNotFoundError, logout } from '../api/auth';
-import { fetchQuizDashboard, startQuizAttempt, type QuizDashboard } from '../api/quiz';
+import { fetchQuizDashboard, type QuizDashboard } from '../api/quiz';
 import { clearConsentsAccepted } from '../auth/consentStorage';
 import { clearSession, isLoggedIn, loadSession } from '../auth/session';
 import type { RootStackParamList } from '../navigation/types';
@@ -60,34 +60,6 @@ export function QuizHomeScreen({ navigation }: Props) {
     };
   }, [loadDash, navigation]);
 
-  const startAttemptAfterConfirm = useCallback(async () => {
-    if (!email) return;
-    setError(null);
-    setDashLoading(true);
-    try {
-      const res = await startQuizAttempt(email);
-      if (!res.ok || res.attempt_id == null || !res.first_question) {
-        showAlert('Cannot start', res.error ?? 'Try again later.');
-        return;
-      }
-      navigation.navigate('QuizPlay', {
-        attemptId: res.attempt_id,
-        totalQuestions: res.total_questions ?? 0,
-        timePerQuestionSeconds: res.time_per_question_seconds ?? 60,
-        marksPerQuestion: res.marks_per_question ?? 10,
-        initialQuestion: res.first_question,
-      });
-    } catch (e) {
-      if (e instanceof AuthApiError) {
-        showAlert('Error', e.message);
-      } else {
-        showAlert('Error', e instanceof Error ? e.message : 'Failed to start.');
-      }
-    } finally {
-      setDashLoading(false);
-    }
-  }, [email, navigation]);
-
   const onAttemptPress = useCallback(async () => {
     if (!email || !dashboard) return;
     if (dashboard.attempts_remaining <= 0) {
@@ -99,8 +71,9 @@ export function QuizHomeScreen({ navigation }: Props) {
       'This will count as one quiz attempt. Continue?',
     );
     if (!ok) return;
-    await startAttemptAfterConfirm();
-  }, [dashboard, email, startAttemptAfterConfirm]);
+    setError(null);
+    navigation.navigate('QuizPrepare', { email });
+  }, [dashboard, email, navigation]);
 
   const onLogout = useCallback(async () => {
     if (!email) return;
