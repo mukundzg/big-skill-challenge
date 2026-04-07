@@ -20,6 +20,7 @@ import type { RootStackParamList } from '../navigation/types';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Landing'>;
+  route: RouteProp<RootStackParamList, 'Landing'>;
 };
 
 function isValidEmail(s: string): boolean {
@@ -149,7 +150,7 @@ export function LandingScreen({ navigation }: Props) {
     try {
       await verifyOtp(trimmedEmail, trimmedOtp);
       // On success, navigate to Home (or follow app logic)
-      navigation.navigate('Home');
+      navigation.navigate('Splash');
     } catch (e) {
       console.log('error', e);
       if (e instanceof AuthApiError) {
