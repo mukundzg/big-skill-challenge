@@ -2,7 +2,6 @@ export type RootStackParamList = {
   Splash: undefined;
   /** Email entry / registration: set `fromUserNotFound` when server has no user row. */
   Landing: { fromUserNotFound?: boolean };
-  VerifyCode: { email: string };
   Home: undefined;
   /** Quiz dashboard after consents (default landing when consents already accepted) */
   QuizHome: undefined;

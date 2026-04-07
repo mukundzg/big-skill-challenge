@@ -6,7 +6,6 @@ import type { RootStackParamList } from './src/navigation/types';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { LandingScreen } from './src/screens/LandingScreen';
 import { SplashScreen } from './src/screens/SplashScreen';
-import { VerifyCodeScreen } from './src/screens/VerifyCodeScreen';
 import { InactiveAccountScreen } from './src/screens/InactiveAccountScreen';
 import { QuizHomeScreen } from './src/screens/QuizHomeScreen';
 import { QuizCompleteScreen } from './src/screens/QuizCompleteScreen';
@@ -38,11 +37,6 @@ export default function App() {
             name="Landing"
             component={LandingScreen}
             options={{ headerShown: false }}
-          />
-          <Stack.Screen
-            name="VerifyCode"
-            component={VerifyCodeScreen}
-            options={{ title: 'Verification' }}
           />
           <Stack.Screen
             name="Home"

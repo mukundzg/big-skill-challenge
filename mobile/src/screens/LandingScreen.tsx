@@ -15,12 +15,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthApiError, requestVerificationCode as sendOtp, verifyCode as verifyOtp } from '../api/auth';
+import { markConsentsAccepted } from '../auth/consentStorage';
+import { clearSession, saveLoggedInSession } from '../auth/session';
 import { useEffect, useRef } from 'react';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Landing'>;
-  route: RouteProp<RootStackParamList, 'Landing'>;
 };
 
 function isValidEmail(s: string): boolean {
@@ -100,7 +101,7 @@ export function LandingScreen({ navigation }: Props) {
   const isFormValid = useMemo(() => {
     const trimmedEmail = email.trim();
     const hasValidEmail = isValidEmail(trimmedEmail);
-    const hasValidOtp = otp.trim().length === 7; // Matching VerifyCodeScreen.tsx standard
+    const hasValidOtp = otp.trim().length === 7;
 
     if (!isOtpSent) {
       if (activeTab === 'register') {
@@ -148,9 +149,29 @@ export function LandingScreen({ navigation }: Props) {
 
     setLoading(true);
     try {
-      await verifyOtp(trimmedEmail, trimmedOtp);
-      // On success, navigate to Home (or follow app logic)
-      navigation.navigate('Splash');
+      const res = await verifyOtp(trimmedEmail, trimmedOtp);
+      const normalizedEmail = (res.email ?? trimmedEmail).trim().toLowerCase();
+
+      if (res.is_active) {
+        await saveLoggedInSession({
+          email: normalizedEmail,
+          userId: res.user_id,
+          isActive: true,
+        });
+        if (res.has_consent === true) {
+          await markConsentsAccepted(normalizedEmail);
+        }
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Splash' }],
+        });
+      } else {
+        await clearSession();
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'InactiveAccount', params: { email: normalizedEmail } }],
+        });
+      }
     } catch (e) {
       console.log('error', e);
       if (e instanceof AuthApiError) {
