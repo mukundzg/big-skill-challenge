@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Callable, Iterator, TypeVar
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
+
+from app.core.app_logger import log_error
+
+T = TypeVar("T")
 
 
 def _database_url() -> str | None:
@@ -75,6 +79,44 @@ _ENGINE = None
 _SessionLocal = None
 
 
+def _ensure_review_tables() -> None:
+    eng = _ENGINE
+    if eng is None:
+        return
+    with eng.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS score_review_history (
+                  id INT AUTO_INCREMENT PRIMARY KEY,
+                  score_id INT NOT NULL,
+                  previous_row_json JSON NOT NULL,
+                  updated_row_json JSON NOT NULL,
+                  reviewer TEXT NOT NULL,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  INDEX idx_score_id (score_id)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS audit_logs_adjudiction (
+                  id INT AUTO_INCREMENT PRIMARY KEY,
+                  entry_id INT,
+                  agent_name TEXT NOT NULL,
+                  action TEXT NOT NULL,
+                  input JSON NOT NULL,
+                  output JSON NOT NULL,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  INDEX idx_entry_id (entry_id)
+                )
+                """
+            )
+        )
+
+
 def init_engine() -> None:
     global _ENGINE, _SessionLocal
 
@@ -87,6 +129,7 @@ def init_engine() -> None:
 
     _ENGINE = create_engine(url, **_pool_kwargs())
     _SessionLocal = sessionmaker(bind=_ENGINE, autoflush=False, autocommit=False)
+    _ensure_review_tables()
 
 
 def engine():
@@ -111,3 +154,16 @@ def session_scope() -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+def run_in_transaction(work: Callable[[Session], T], *, operation: str = "db_operation") -> T:
+    """
+    Generic transactional wrapper for service-layer DB writes/reads.
+    Commits on success, rolls back automatically on error via session_scope().
+    """
+    try:
+        with session_scope() as session:
+            return work(session)
+    except Exception as e:
+        log_error("Database transaction failed", exc=e, operation=operation)
+        raise

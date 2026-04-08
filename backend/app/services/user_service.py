@@ -7,15 +7,20 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
+from app.core.service_guard import guarded_service
 from app.db import engine, session_scope
 from app.models import User
 
 
-def get_user_by_email(email: str) -> User | None:
+@guarded_service("user.get_user_by_email")
+def get_user_by_email(email: str, *, include_deleted: bool = False) -> User | None:
     if engine() is None:
         return None
     with session_scope() as session:
-        user = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        q = select(User).where(User.email == email)
+        if not include_deleted:
+            q = q.where(User.is_deleted.is_(False))
+        user = session.execute(q).scalar_one_or_none()
         if user is None:
             return None
         # Detach before commit() in session_scope — otherwise instances expire and
@@ -64,6 +69,7 @@ def _next_screen(is_active: bool) -> str:
     return "home" if is_active else "inactive"
 
 
+@guarded_service("user.upsert_verified_user")
 def upsert_verified_user(email: str) -> VerifiedUserResult | None:
     """Insert or update user after successful email verification (login)."""
     if engine() is None:
@@ -71,6 +77,17 @@ def upsert_verified_user(email: str) -> VerifiedUserResult | None:
 
     with session_scope() as session:
         existing = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        if existing is not None and getattr(existing, "is_deleted", False):
+            has_consent = existing.consent_accepted_at is not None
+            return VerifiedUserResult(
+                user_id=int(existing.id),
+                email=existing.email,
+                is_verified=bool(existing.is_verified),
+                is_active=False,
+                next_screen=_next_screen(False),
+                is_new_user=False,
+                has_consent=has_consent,
+            )
         is_new_user = existing is None
         if existing is None:
             user = User(
@@ -99,6 +116,7 @@ def upsert_verified_user(email: str) -> VerifiedUserResult | None:
         )
 
 
+@guarded_service("user.logout_user")
 def logout_user(email: str) -> LogoutOutcome:
     """Mark user as logged out: sets is_active to False (logged-in flag)."""
     if engine() is None:
@@ -119,24 +137,30 @@ def logout_user(email: str) -> LogoutOutcome:
         )
 
 
+@guarded_service("user.get_consent_status")
 def get_consent_status(email: str) -> bool | None:
     """None if DB unavailable; True/False if user has recorded consent."""
     if engine() is None:
         return None
     with session_scope() as session:
-        user = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        user = session.execute(
+            select(User).where(User.email == email, User.is_deleted.is_(False))
+        ).scalar_one_or_none()
         if user is None:
             return False
         return user.consent_accepted_at is not None
 
 
+@guarded_service("user.record_user_consent")
 def record_user_consent(email: str) -> ConsentOutcome:
     """Set consent_accepted_at if not already set. User must exist and be active."""
     if engine() is None:
         return ConsentOutcome(no_database=True)
 
     with session_scope() as session:
-        user = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        user = session.execute(
+            select(User).where(User.email == email, User.is_deleted.is_(False))
+        ).scalar_one_or_none()
         if user is None:
             return ConsentOutcome(not_found=True)
         if not user.is_active:

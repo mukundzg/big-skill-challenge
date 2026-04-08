@@ -32,6 +32,8 @@ def _user_id_or_404(email: str) -> int:
     user = get_user_by_email(email)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
+    if getattr(user, "is_deleted", False):
+        raise HTTPException(status_code=403, detail="Account not available")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account inactive")
     return int(user.id)

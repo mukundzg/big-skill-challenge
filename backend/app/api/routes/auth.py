@@ -15,6 +15,7 @@ from app.schemas.auth import (
     VerifyBody,
     VerifyResponse,
 )
+from app.core.app_logger import log_info
 from app.services.email_service import (
     log_bypass_code,
     send_email,
@@ -42,6 +43,7 @@ def request_code(body: RequestCodeBody):
     email = normalize_email(body.email)
     code = generate_code()
     store_code(email, code)
+    log_info("Verification code generated and stored", email=email)
 
     if verification_email_bypass_enabled():
         log_bypass_code(email, code)
@@ -58,6 +60,7 @@ def request_code(body: RequestCodeBody):
 def verify(body: VerifyBody, request: Request):
     email = normalize_email(body.email)
     verify_or_raise(email, body.code)
+    log_info("Email verification succeeded", email=email)
     if database_required() and not is_database_configured():
         raise HTTPException(
             status_code=503,
