@@ -7,6 +7,16 @@ cp .env.example .env
 # Edit `.env`: set `DATABASE_URL` or `MYSQL_HOST` / `MYSQL_DB` / `MYSQL_USER` / `MYSQL_PASSWORD` (see `.env.example`).
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
+# Optional: Redis (recommended for Gemini cost/quota)
+# If REDIS_URL is set, the server caches the Gemini-generated raw quiz questions per PDF hash,
+# so the same PDF can be reused across multiple users without repeated Gemini calls.
+#
+# Quick start (local):
+#   docker run --rm -p 6379:6379 redis:7-alpine
+# Then in backend/.env:
+#   REDIS_URL=redis://localhost:6379/0
+#   QUIZ_CACHE_TTL_SECONDS=604800
+
 # Inbox.com SMTP setup
 # In .env:
 # VERIFICATION_EMAIL_BYPASS=false
@@ -19,15 +29,6 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 # SMTP_HOST=smtp.inbox.com
 # SMTP_PORT=587
 # SMTP_SECURITY=starttls
-
-# Mailjet API setup
-# In .env:
-# VERIFICATION_EMAIL_BYPASS=false
-# SMTP_PROVIDER=mailjet
-# MJ_APIKEY_PUBLIC=<your mailjet public key>
-# MJ_APIKEY_PRIVATE=<your mailjet private key>
-# MJ_FROM_EMAIL=<your verified sender email>
-# MJ_FROM_NAME=<sender name shown to users>
 
 # Gmail SMTP setup (STARTTLS + Gmail App Password)
 # In .env:
