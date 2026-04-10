@@ -9,7 +9,7 @@ from typing import Callable, Iterator, TypeVar
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.app_logger import log_error
+from app.core.app_logger import format_exception_for_log, log_error
 
 T = TypeVar("T")
 
@@ -54,7 +54,11 @@ def database_required() -> bool:
 
 def test_database_connection() -> tuple[bool, str | None]:
     """Try SELECT 1. Returns (ok, error_message)."""
-    init_engine()
+    try:
+        init_engine()
+    except Exception as e:
+        # Do not propagate DB init failures as SQLAlchemy stack traces through preflight/lifespan.
+        return False, format_exception_for_log(e)
     eng = _ENGINE
     if eng is None:
         return False, "No DATABASE_URL or MYSQL_HOST/MYSQL_DB in environment"
@@ -63,15 +67,25 @@ def test_database_connection() -> tuple[bool, str | None]:
             conn.execute(text("SELECT 1"))
         return True, None
     except Exception as e:
-        return False, str(e)
+        return False, format_exception_for_log(e)
 
 
 def _pool_kwargs() -> dict:
+    """
+    connect_timeout avoids hanging for minutes when MYSQL_HOST is wrong or MySQL is down
+    (preflight and first pool connections).
+    """
+    try:
+        connect_sec = int(os.environ.get("MYSQL_CONNECT_TIMEOUT_SEC", "10").strip() or "10")
+    except ValueError:
+        connect_sec = 10
+    connect_sec = max(1, min(connect_sec, 120))
     return {
         "pool_pre_ping": True,
         "pool_size": int(os.environ.get("MYSQL_POOL_SIZE", "5")),
         "max_overflow": int(os.environ.get("MYSQL_MAX_OVERFLOW", "10")),
         "pool_recycle": int(os.environ.get("MYSQL_POOL_RECYCLE", "3600")),
+        "connect_args": {"connect_timeout": connect_sec},
     }
 
 

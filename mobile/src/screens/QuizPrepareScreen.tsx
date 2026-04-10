@@ -27,10 +27,9 @@ function simulatedProgress(elapsedMs: number, cap: number): number {
 }
 
 function phaseLabel(p: number): string {
-  if (p < 16) return 'Reading PDF…';
-  if (p < 38) return 'Extracting text…';
-  if (p < 62) return 'Generating questions with AI…';
-  if (p < 88) return 'Building your quiz…';
+  if (p < 28) return 'Starting your quiz…';
+  if (p < 55) return 'Loading questions from the bank…';
+  if (p < 82) return 'Preparing your first question…';
   return 'Almost ready…';
 }
 
@@ -120,7 +119,7 @@ export function QuizPrepareScreen({ navigation, route }: Props) {
       <ActivityIndicator size="large" color="#2563eb" style={styles.spinner} />
       <Text style={styles.pct}>{rounded}%</Text>
       <Text style={styles.phase}>{phase}</Text>
-      <Text style={styles.hint}>This can take a minute while we read your question bank.</Text>
+      <Text style={styles.hint}>We load questions from the server; this is usually quick.</Text>
       <View style={styles.track}>
         <View style={[styles.fill, { width: `${rounded}%` }]} />
       </View>

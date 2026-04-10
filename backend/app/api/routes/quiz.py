@@ -81,6 +81,8 @@ def quiz_start(body: EmailBody, request: Request):
         first_question=result.first_question,
         time_per_question_seconds=result.time_seconds,
         marks_per_question=result.marks_per_question,
+        source_file_id=result.source_file_id,
+        source_file_name=result.source_file_name,
     )
 
 

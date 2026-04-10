@@ -209,3 +209,38 @@ class ContentSubjectRow(BaseModel):
 
 class ContentSubjectsResponse(BaseModel):
     subjects: list[ContentSubjectRow]
+
+
+class QuestionBankRow(BaseModel):
+    id: int
+    file_name: str
+    created_at: str | None = None
+    created_by: int | None = None
+    updated_at: str | None = None
+    updated_by: int | None = None
+    is_deleted: bool
+    question_count: int = 0
+
+
+class QuestionBanksResponse(BaseModel):
+    rows: list[QuestionBankRow]
+
+
+class QuestionBankUploadItemResult(BaseModel):
+    """One PDF in a batch upload (processed sequentially in queue order)."""
+
+    original_file_name: str
+    success: bool
+    file_id: int | None = None
+    file_name: str | None = None
+    inserted_questions: int = 0
+    deduped_questions: int = 0
+    used_ollama: bool = False
+    error: str | None = None
+
+
+class QuestionBankUploadBatchResponse(BaseModel):
+    ok: Literal[True] = True
+    items: list[QuestionBankUploadItemResult]
+    succeeded: int
+    failed: int

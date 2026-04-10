@@ -146,3 +146,25 @@ export type ContentSubjectRow = {
   created_at: string | null;
   updated_at: string | null;
 };
+
+export type QuestionBankRow = {
+  id: number;
+  file_name: string;
+  created_at: string | null;
+  created_by: number | null;
+  updated_at: string | null;
+  updated_by: number | null;
+  is_deleted: boolean;
+  question_count: number;
+};
+
+/** Dashboard banner while a question-bank upload runs in the background */
+export type QbBackgroundJob = {
+  id: string;
+  fileLabel: string;
+  progress: number;
+  phaseLabel: string;
+  done: boolean;
+  error?: string;
+  summary?: string;
+};

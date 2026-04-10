@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from app.core.app_logger import log_error_with_traceback
 from app.services.content_resolver.logging_utils import app_log
 
 
@@ -127,13 +128,14 @@ class SubmissionBatcher:
                 f"batch flushed: submission_count={len(submission_ids)}, batch_job_id={batch_job_id}, status=submitted",
             )
         except Exception as exc:
+            log_error_with_traceback(
+                "Submission batcher flush failed",
+                exc,
+                submission_count=len(submission_ids),
+            )
             with self._lock:
                 for sid in submission_ids:
                     state = self._states[sid]
                     state.status = "failed"
                     state.error = str(exc)
-            app_log(
-                "batcher",
-                f"batch flush failed: submission_count={len(submission_ids)}, status=failed, error={exc}",
-            )
 

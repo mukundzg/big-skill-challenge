@@ -166,6 +166,15 @@ def gemini_model_name() -> str:
     return os.environ.get("QUIZ_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 
 
+def _gemini_preflight_timeout_ms() -> int:
+    """Milliseconds for genai HttpOptions.timeout (preflight ping only)."""
+    raw = os.environ.get("GEMINI_PREFLIGHT_TIMEOUT_MS", "20000").strip() or "20000"
+    try:
+        return max(3000, int(raw))
+    except ValueError:
+        return 20000
+
+
 def verify_gemini_service_ready() -> tuple[bool, str | None]:
     """
     Lightweight ping: same API key + model as quiz generation.
@@ -176,7 +185,11 @@ def verify_gemini_service_ready() -> tuple[bool, str | None]:
         return False, "GEM_KEY (or GOOGLE_API_KEY) is not set"
 
     try:
-        client = genai.Client(api_key=key)
+        timeout_ms: int = _gemini_preflight_timeout_ms()
+        client = genai.Client(
+            api_key=key,
+            http_options=types.HttpOptions(timeout=timeout_ms),
+        )
         response = client.models.generate_content(
             model=gemini_model_name(),
             contents='Reply with exactly the single word "OK" and nothing else.',

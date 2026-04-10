@@ -16,6 +16,7 @@ export type QuizStartResult = {
   attempt_id: number | null;
   attempt_number: number | null;
   total_questions: number | null;
+  /** First question from DB-backed question bank; same shape as `next_question` on /quiz/answer */
   first_question: {
     index: number;
     question: string;
@@ -23,6 +24,10 @@ export type QuizStartResult = {
   } | null;
   time_per_question_seconds: number | null;
   marks_per_question: number | null;
+  /** `files.id` for the question bank used for this attempt */
+  source_file_id?: number | null;
+  /** Stored bank filename (metadata) */
+  source_file_name?: string | null;
   error?: string | null;
 };
 

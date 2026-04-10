@@ -7,8 +7,8 @@ Each line looks like:
 
 The `: in line number N` suffix is appended only for error-level lines (ERROR/CRITICAL).
 
-Levels: debug, info, warn, error (lowercase). Filename/function identify the app callsite;
-for exceptions on error logs, that is the caller frame that invoked the failing path.
+Levels: debug, info, warn, error (lowercase). Filename/function identify the **application**
+callsite (who called log_* / app_log), not library internals inside the exception traceback.
 
 Configuration (environment variables):
   LOG_DIR              — Directory for log files (default: backend/logs).
@@ -17,14 +17,19 @@ Configuration (environment variables):
   LOG_RETENTION_FILES  — Keep at most this many rotated log files (default: 20).
   LOG_CONSOLE          — If false, file only (no stderr). Default: true (mirror to terminal).
   LOG_CONSOLE_LEVEL    — Minimum level for the console sink (default: INFO).
+                         Stderr mirrors the same one-line pipe format as the file for primary errors;
+                         full Python tracebacks from log_error_with_traceback are file-only.
   LOG_ENQUEUE          — If true, loguru writes each sink in a background thread (default: false).
                          Enqueue can delay or complicate shutdown (Ctrl+C); leave false unless needed.
+  LOG_STDERR_TRACEBACKS — If true, do not patch uvicorn stdlib loggers (default: false). Use to debug ASGI startup.
 """
 
 from __future__ import annotations
 
 import inspect
+import logging
 import os
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -36,6 +41,12 @@ from loguru import logger
 _APP_ROOT = Path(__file__).resolve().parents[1]
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _LOGGER_MODULE = Path(__file__).name
+
+# SQLAlchemy / drivers append this; it is not useful in our pipe log lines.
+_SQLA_BACKGROUND_TAIL = re.compile(
+    r"\s*\(Background on this error at:\s*https?://[^)]+\)\s*",
+    re.IGNORECASE | re.DOTALL,
+)
 
 _CONFIGURED = False
 
@@ -88,7 +99,10 @@ def _skip_frame_for_caller(filename: str) -> bool:
     fn = Path(filename).name
     if fn == _LOGGER_MODULE:
         return True
-    if "loguru" in filename.replace("\\", "/"):
+    norm = filename.replace("\\", "/")
+    if "content_resolver" in norm and fn == "logging_utils.py":
+        return True
+    if "loguru" in norm:
         return True
     return False
 
@@ -103,35 +117,25 @@ def _caller_site_without_exception() -> tuple[str, int, str]:
     return "?", 0, "?"
 
 
-def _caller_site_from_exception(exc: BaseException) -> tuple[str, int, str]:
-    """
-    Prefer the app frame that **called** the innermost app frame in the traceback
-    (the callsite into the library / failing path).
-    """
-    tb = getattr(exc, "__traceback__", None)
-    if tb is None:
-        return _caller_site_without_exception()
-
-    frames = traceback.extract_tb(tb)
-    if not frames:
-        return _caller_site_without_exception()
-
-    app_indices = [i for i, f in enumerate(frames) if _is_project_source(f.filename)]
-    if not app_indices:
-        f = frames[-1]
-        return Path(f.filename).name, f.lineno, f.name
-
-    inner = app_indices[-1]
-    if inner > 0 and _is_project_source(frames[inner - 1].filename):
-        f = frames[inner - 1]
-    else:
-        f = frames[inner]
-    return Path(f.filename).name, f.lineno, f.name
-
-
 def _no_angle(s: str) -> str:
     """Avoid loguru treating `<...>` in output as markup when present in exception text."""
     return str(s).replace("<", "[").replace(">", "]")
+
+
+def _escape_curly(s: str) -> str:
+    """So loguru does not treat `{` / `}` in API/exception text as format placeholders."""
+    return str(s).replace("{", "{{").replace("}", "}}")
+
+
+def format_exception_for_log(exc: BaseException) -> str:
+    """
+    One-line, developer-facing exception text for logs and returned error strings.
+    Strips SQLAlchemy's '(Background on this error at: https://...)' tail and collapses whitespace.
+    """
+    s = str(exc).strip()
+    s = _SQLA_BACKGROUND_TAIL.sub(" ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 def _format_record(record: dict[str, Any]) -> str:
@@ -142,6 +146,9 @@ def _format_record(record: dict[str, Any]) -> str:
     src_func = _no_angle(str(extra.get("src_func", "?")))
     src_line = extra.get("src_line", 0)
     message = _no_angle(str(record["message"]))
+    # Keep traceback continuation blocks multiline in the file; other messages stay one line per record.
+    if not extra.get("traceback_only") and "\n" in message:
+        message = message.split("\n", 1)[0].rstrip() + " | … (see log file for full text)"
     line_suffix = (
         f" : in line number {src_line}" if lvl in ("ERROR", "CRITICAL") else ""
     )
@@ -149,6 +156,46 @@ def _format_record(record: dict[str, Any]) -> str:
         f"{_ts_for_line(record)}|||{level}|||{src_file}|||{src_func}|||"
         f"{message}{line_suffix}\n"
     )
+
+
+def _console_sink_filter(record: dict[str, Any]) -> bool:
+    """Omit traceback continuation records from stderr so the terminal matches one-line app logs."""
+    if record["extra"].get("traceback_only"):
+        return False
+    msg = str(record.get("message", "")).lstrip()
+    if msg.startswith("Traceback (most recent call last)"):
+        return False
+    return True
+
+
+def apply_stderr_traceback_suppression() -> None:
+    """
+    Uvicorn / stdlib loggers often print a full Python traceback on stderr after our loguru line.
+    Re-bind uvicorn loggers to a one-line formatter (no exc_info text). Safe to call again after
+    uvicorn configures logging (e.g. from FastAPI lifespan). Opt out with LOG_STDERR_TRACEBACKS=true.
+    """
+    if _env_flag_enabled("LOG_STDERR_TRACEBACKS"):
+        return
+
+    class _OneLineStderrFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:
+            msg = record.getMessage()
+            if (
+                not _env_flag_enabled("LOG_STDERR_TRACEBACKS")
+                and "Traceback (most recent call last)" in msg
+            ):
+                return f"{record.levelname}: error (details in log file under LOG_DIR)\n"
+            msg = " ".join(msg.split())
+            return f"{record.levelname}: {msg}\n"
+
+    for name in ("uvicorn.error", "uvicorn"):
+        lg = logging.getLogger(name)
+        lg.handlers.clear()
+        h = logging.StreamHandler(sys.stderr)
+        h.setFormatter(_OneLineStderrFormatter())
+        h.setLevel(logging.DEBUG)
+        lg.addHandler(h)
+        lg.propagate = False
 
 
 def _context_suffix(**ctx: Any) -> str:
@@ -187,6 +234,8 @@ def configure_logging() -> None:
         enqueue=use_enqueue,
         encoding="utf-8",
         colorize=False,
+        backtrace=False,
+        diagnose=False,
     )
 
     if mirror_to_console:
@@ -194,9 +243,14 @@ def configure_logging() -> None:
             sys.stderr,
             format=_format_record,
             level=console_level,
+            filter=_console_sink_filter,
             enqueue=use_enqueue,
             colorize=False,
+            backtrace=False,
+            diagnose=False,
         )
+
+    apply_stderr_traceback_suppression()
 
     _CONFIGURED = True
 
@@ -213,17 +267,15 @@ def shutdown_logging() -> None:
 
 
 def _bind_and_log(level: str, message: str, exc: BaseException | None, **ctx: Any) -> None:
+    # Always attribute file/func/line to our code that called log_* (e.g. init_engine), not SQLAlchemy frames.
+    fn, ln, func = _caller_site_without_exception()
+    text = message + _context_suffix(**ctx)
     if exc is not None:
-        fn, ln, func = _caller_site_from_exception(exc)
-        text = message + _context_suffix(**ctx)
-        if str(exc).strip() and str(exc) not in message:
-            text = f"{text} | error={exc!s}"
-    else:
-        fn, ln, func = _caller_site_without_exception()
-        text = message + _context_suffix(**ctx)
+        err_s = format_exception_for_log(exc)
+        if err_s and err_s not in message:
+            text = f"{text} | error={err_s}"
 
-    # raw=True: API/exception text may contain `{` `}` (e.g. protobuf); loguru would treat them as format placeholders.
-    logger.bind(src_file=fn, src_line=ln, src_func=func).opt(raw=True).log(level, text)
+    logger.bind(src_file=fn, src_line=ln, src_func=func).log(level, _escape_curly(text))
 
 
 def log_debug(message: str, **ctx: Any) -> None:
@@ -240,3 +292,20 @@ def log_warn(message: str, exc: BaseException | None = None, **ctx: Any) -> None
 
 def log_error(message: str, exc: BaseException | None = None, **ctx: Any) -> None:
     _bind_and_log("ERROR", message, exc, **ctx)
+
+
+def log_error_with_traceback(message: str, exc: BaseException, **ctx: Any) -> None:
+    """
+    Log an error: one structured line everywhere; full traceback is appended only to the log file
+    (stderr shows the same single line as the daily log, not a Python stack dump).
+    """
+    log_error(message, exc=exc, **ctx)
+    fn, ln, func = _caller_site_without_exception()
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    tb = _escape_curly(_no_angle(tb))
+    logger.bind(
+        src_file=fn,
+        src_line=ln,
+        src_func=func,
+        traceback_only=True,
+    ).log("ERROR", tb)

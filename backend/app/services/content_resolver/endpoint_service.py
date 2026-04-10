@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from app.core.app_logger import log_error_with_traceback
 from app.services.content_resolver.batcher import SubmissionBatcher
 from app.services.content_resolver.db import MySQLDBHandler
 from app.services.content_resolver.logging_utils import app_log
@@ -37,9 +38,9 @@ def get_pipeline() -> EvaluationPipeline:
             app_log("endpoint_service", f"queue backend active: {cfg['queue_backend']}")
         except Exception as exc:
             if cfg.get("queue_fallback_to_inmemory", True):
-                app_log(
-                    "endpoint_service",
-                    f"queue backend '{cfg['queue_backend']}' unavailable: {exc}. falling back to inmemory",
+                log_error_with_traceback(
+                    f"Queue backend '{cfg['queue_backend']}' unavailable; falling back to inmemory",
+                    exc,
                 )
                 _pipeline = EvaluationPipeline(
                     db_handler=db,
@@ -53,6 +54,7 @@ def get_pipeline() -> EvaluationPipeline:
                 _pipeline.start(init_schema=True)
                 app_log("endpoint_service", "queue backend active: inmemory (fallback)")
             else:
+                log_error_with_traceback("Content resolver pipeline initialization failed", exc)
                 raise
     return _pipeline
 

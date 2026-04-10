@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from app.core.app_logger import log_error_with_traceback
 from app.services.content_resolver.db import MySQLDBHandler
 from app.services.content_resolver.evaluation_service import run_evaluation
 from app.services.content_resolver.logging_utils import app_log
@@ -138,16 +139,11 @@ class EvaluationPipeline:
     def _evaluator_loop(self) -> None:
         thread_name = threading.current_thread().name
         app_log("pipeline", f"evaluator loop entered: worker={thread_name}")
-        empty_polls = 0
         while not self._stop_event.is_set():
             try:
                 queued = self._queue_backend.get_ingress(timeout_sec=0.2)
                 if not queued:
-                    empty_polls += 1
-                    if empty_polls % 100 == 0:
-                        app_log("pipeline", f"evaluator polling: worker={thread_name}, empty_polls={empty_polls}")
                     continue
-                empty_polls = 0
                 job_id = queued["job_id"]
                 with self._lock:
                     job = self._jobs.get(job_id)
@@ -179,7 +175,11 @@ class EvaluationPipeline:
                         "consistency_report": result["consistency_report"],
                     }
             except Exception as exc:
-                app_log("pipeline", f"evaluator loop error: {exc}")
+                log_error_with_traceback(
+                    "Evaluation pipeline evaluator worker failed",
+                    exc,
+                    worker=thread_name,
+                )
                 # Best effort: mark job failed when context exists.
                 if "job_id" in locals():
                     with self._lock:
@@ -210,10 +210,16 @@ class EvaluationPipeline:
                     pending.append(item)
                     app_log("pipeline", f"writer queue accepted job: job_id={item.get('job_id')}, pending={len(pending)}")
             except Exception as exc:
-                app_log("pipeline", f"writer loop error: {exc}")
+                log_error_with_traceback("Evaluation pipeline writer loop failed", exc)
 
         if pending:
-            self._flush_pending(pending)
+            try:
+                self._flush_pending(pending)
+            except Exception as exc:
+                log_error_with_traceback(
+                    "Evaluation pipeline final flush on shutdown failed",
+                    exc,
+                )
 
     def _flush_pending(self, batch_results: List[Dict[str, Any]]) -> None:
         payloads = [x["db_payload"] for x in batch_results]
