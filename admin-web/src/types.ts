@@ -136,3 +136,13 @@ export type ScoreHighlightsResponse = {
   offset: number;
   rows: ScoreRow[];
 };
+
+export type ContentSubjectRow = {
+  id: number;
+  subject_name: string;
+  subject_description: string | null;
+  is_active: boolean;
+  is_deleted: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+};

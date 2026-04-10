@@ -1,0 +1,16 @@
+{
+  "queue_backend": "inmemory",
+  "evaluator_workers": 12,
+  "db_batch_size": 500,
+  "db_flush_interval_sec": 0.5,
+  "ingress_queue_size": 50000,
+  "writer_queue_size": 100000,
+  "redis_host": "127.0.0.1",
+  "redis_port": 6379,
+  "redis_db": 0,
+  "redis_password": "",
+  "redis_prefix": "entry_eval",
+  "submit_batch_max_size": 20,
+  "submit_batch_max_wait_ms": 1000
+}
+
