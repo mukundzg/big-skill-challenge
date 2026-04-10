@@ -79,42 +79,35 @@ _ENGINE = None
 _SessionLocal = None
 
 
-def _ensure_review_tables() -> None:
+def _assert_required_tables() -> None:
     eng = _ENGINE
     if eng is None:
         return
-    with eng.begin() as conn:
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS score_review_history (
-                  id INT AUTO_INCREMENT PRIMARY KEY,
-                  score_id INT NOT NULL,
-                  previous_row_json JSON NOT NULL,
-                  updated_row_json JSON NOT NULL,
-                  reviewer TEXT NOT NULL,
-                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  INDEX idx_score_id (score_id)
-                )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS audit_logs_adjudiction (
-                  id INT AUTO_INCREMENT PRIMARY KEY,
-                  entry_id INT,
-                  agent_name TEXT NOT NULL,
-                  action TEXT NOT NULL,
-                  input JSON NOT NULL,
-                  output JSON NOT NULL,
-                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  INDEX idx_entry_id (entry_id)
-                )
-                """
-            )
-        )
+    required_tables = ("score_review_history", "audit_logs_adjudiction")
+    try:
+        with eng.connect() as conn:
+            db_name = conn.execute(text("SELECT DATABASE()")).scalar()
+            if not db_name:
+                raise RuntimeError("No active database selected")
+            for table_name in required_tables:
+                exists = conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(1)
+                        FROM information_schema.TABLES
+                        WHERE TABLE_SCHEMA = :schema_name AND TABLE_NAME = :table_name
+                        """
+                    ),
+                    {"schema_name": db_name, "table_name": table_name},
+                ).scalar()
+                if not exists:
+                    raise RuntimeError(
+                        f"Required table '{table_name}' is missing. "
+                        "Create required tables via migrations before startup."
+                    )
+    except Exception as e:
+        log_error("Required DB table validation failed", exc=e)
+        raise
 
 
 def init_engine() -> None:
@@ -127,9 +120,15 @@ def init_engine() -> None:
     if not url:
         return
 
-    _ENGINE = create_engine(url, **_pool_kwargs())
-    _SessionLocal = sessionmaker(bind=_ENGINE, autoflush=False, autocommit=False)
-    _ensure_review_tables()
+    try:
+        _ENGINE = create_engine(url, **_pool_kwargs())
+        _SessionLocal = sessionmaker(bind=_ENGINE, autoflush=False, autocommit=False)
+        _assert_required_tables()
+    except Exception as e:
+        log_error("Database engine initialization failed", exc=e)
+        _ENGINE = None
+        _SessionLocal = None
+        raise
 
 
 def engine():

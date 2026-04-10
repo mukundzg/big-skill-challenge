@@ -189,3 +189,23 @@ class ScoreReviewHistoryResponse(BaseModel):
 class ScoreReviewUpdateResponse(BaseModel):
     ok: Literal[True] = True
     score: ScoreDetailResponse
+
+
+class ContentSubjectCreateBody(BaseModel):
+    subject_name: str = Field(..., min_length=2, max_length=255)
+    subject_description: str | None = Field(default=None, max_length=1000)
+    is_active: bool = False
+
+
+class ContentSubjectRow(BaseModel):
+    id: int
+    subject_name: str
+    subject_description: str | None = None
+    is_active: bool
+    is_deleted: bool
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ContentSubjectsResponse(BaseModel):
+    subjects: list[ContentSubjectRow]

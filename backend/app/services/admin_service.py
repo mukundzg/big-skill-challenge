@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 
 from app.core.service_guard import guarded_service
 from app.db import engine, session_scope
-from app.models import Role, User
+from app.models import ContentSubject, Role, User
 from app.services.verification_service import normalize_email
 
 ADMIN_ROLE_NAME = "admin"
@@ -234,6 +234,113 @@ class AdminListRow:
     is_active: bool
     is_deleted: bool
     created_at: str | None
+
+
+@dataclass
+class ContentSubjectRow:
+    id: int
+    subject_name: str
+    subject_description: str | None
+    is_active: bool
+    is_deleted: bool
+    created_at: str | None
+    updated_at: str | None
+
+
+@guarded_service("admin.list_content_subjects")
+def list_content_subjects(include_deleted: bool = False) -> list[ContentSubjectRow]:
+    if engine() is None:
+        return []
+    with session_scope() as session:
+        q = select(ContentSubject)
+        if not include_deleted:
+            q = q.where(ContentSubject.is_deleted.is_(False))
+        rows = session.execute(q.order_by(ContentSubject.id.desc())).scalars().all()
+        out: list[ContentSubjectRow] = []
+        for r in rows:
+            out.append(
+                ContentSubjectRow(
+                    id=int(r.id),
+                    subject_name=r.subject_name,
+                    subject_description=r.subject_description,
+                    is_active=bool(r.is_active),
+                    is_deleted=bool(r.is_deleted),
+                    created_at=r.created_at.isoformat() if r.created_at else None,
+                    updated_at=r.updated_at.isoformat() if r.updated_at else None,
+                )
+            )
+        return out
+
+
+@guarded_service("admin.add_content_subject")
+def add_content_subject(
+    subject_name: str,
+    subject_description: str | None,
+    is_active: bool,
+    actor_user_id: int | None,
+) -> ContentSubjectRow:
+    if engine() is None:
+        raise RuntimeError("Database not configured")
+    name = subject_name.strip()
+    if not name:
+        raise ValueError("subject_name is required")
+    with session_scope() as session:
+        existing_name = session.execute(
+            select(ContentSubject).where(
+                ContentSubject.subject_name == name,
+                ContentSubject.is_deleted.is_(False),
+            )
+        ).scalar_one_or_none()
+        if existing_name is not None:
+            raise ValueError("Subject already exists")
+
+        # Explicit single-active check while adding.
+        if is_active:
+            active_existing = session.execute(
+                select(ContentSubject).where(
+                    ContentSubject.is_active.is_(True),
+                    ContentSubject.is_deleted.is_(False),
+                )
+            ).scalar_one_or_none()
+            if active_existing is not None:
+                raise ValueError(
+                    f"Active subject already exists: '{active_existing.subject_name}'. "
+                    "Soft-delete/deactivate it before adding another active subject."
+                )
+
+        row = ContentSubject(
+            subject_name=name,
+            subject_description=subject_description.strip() if subject_description else None,
+            is_active=bool(is_active),
+            is_deleted=False,
+            created_by=actor_user_id,
+            updated_by=actor_user_id,
+        )
+        session.add(row)
+        session.flush()
+        return ContentSubjectRow(
+            id=int(row.id),
+            subject_name=row.subject_name,
+            subject_description=row.subject_description,
+            is_active=bool(row.is_active),
+            is_deleted=bool(row.is_deleted),
+            created_at=row.created_at.isoformat() if row.created_at else None,
+            updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        )
+
+
+@guarded_service("admin.soft_delete_content_subject")
+def soft_delete_content_subject(subject_id: int, actor_user_id: int | None) -> None:
+    if engine() is None:
+        raise RuntimeError("Database not configured")
+    with session_scope() as session:
+        row = session.get(ContentSubject, subject_id)
+        if row is None or bool(row.is_deleted):
+            raise ValueError("Subject not found")
+        row.is_deleted = True
+        row.is_active = False
+        row.updated_by = actor_user_id
+        session.flush()
 
 
 @guarded_service("admin.list_admins")

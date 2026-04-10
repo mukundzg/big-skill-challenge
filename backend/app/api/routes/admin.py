@@ -16,6 +16,9 @@ from app.schemas.admin import (
     AnalyticsSummaryResponse,
     AttemptAnalyticsRow,
     BootstrapVerifyBody,
+    ContentSubjectCreateBody,
+    ContentSubjectRow,
+    ContentSubjectsResponse,
     ContentAnalysisScoresResponse,
     CreatedAdminCredentials,
     OkResponse,
@@ -187,6 +190,60 @@ def disable_admin_user(
         admin_service.disable_admin(user_id, actor)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    return OkResponse(ok=True)
+
+
+@router.get("/content-subjects", response_model=ContentSubjectsResponse)
+def list_content_subjects(
+    token: Annotated[str, Depends(_auth_header)],
+    include_deleted: bool = False,
+):
+    try:
+        admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    rows = admin_service.list_content_subjects(include_deleted=include_deleted)
+    return ContentSubjectsResponse(subjects=[ContentSubjectRow(**r.__dict__) for r in rows])
+
+
+@router.post("/content-subjects", response_model=ContentSubjectRow)
+def add_content_subject(
+    body: ContentSubjectCreateBody,
+    token: Annotated[str, Depends(_auth_header)],
+):
+    try:
+        actor = admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    try:
+        row = admin_service.add_content_subject(
+            subject_name=body.subject_name,
+            subject_description=body.subject_description,
+            is_active=body.is_active,
+            actor_user_id=actor,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return ContentSubjectRow(**row.__dict__)
+
+
+@router.post("/content-subjects/{subject_id}/soft-delete", response_model=OkResponse)
+def soft_delete_content_subject(
+    subject_id: int,
+    token: Annotated[str, Depends(_auth_header)],
+):
+    try:
+        actor = admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    try:
+        admin_service.soft_delete_content_subject(subject_id=subject_id, actor_user_id=actor)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     return OkResponse(ok=True)
 
 

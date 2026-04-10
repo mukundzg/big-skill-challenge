@@ -171,3 +171,23 @@ class AttemptQuestionTiming(Base):
     )
     question_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     shown_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
+
+
+class ContentSubject(Base):
+    __tablename__ = "content_subjects"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    subject_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    subject_description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    created_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+    )
+    updated_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
