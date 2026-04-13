@@ -123,7 +123,7 @@ export function Consent({ navigation }: Props) {
       }
       navigation.reset({
         index: 0,
-        routes: [{ name: 'Payment' }],
+        routes: [{ name: 'Dashboard' }],
       });
     } catch (e) {
       if (e instanceof AuthApiError) {
@@ -222,7 +222,7 @@ export function Consent({ navigation }: Props) {
             end={{ x: 1, y: 0 }}
             style={styles.btnPrimary}
           >
-            <Text style={styles.btnPrimaryLabel}>Continue to Payment →</Text>
+            <Text style={styles.btnPrimaryLabel}>Continue to Dashboard →</Text>
           </LinearGradient>
         </Pressable>
 
