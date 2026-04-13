@@ -67,6 +67,9 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 # If you use app consent (POST /auth/consent), add column once:
 # ALTER TABLE users ADD COLUMN consent_accepted_at DATETIME NULL AFTER updated_by;
 #
+# Question bank + quiz settings: minimum questions per PDF / per attempt (see schema_patches/001_quiz_settings_questions_per_attempt.sql):
+# ALTER TABLE quiz_settings ADD COLUMN questions_per_attempt BIGINT NOT NULL DEFAULT 10;
+#
 # Pre-startup checks (see app/core/preflight.py): MySQL must be configured and reachable
 # before uvicorn loads the app, unless you explicitly skip (dev only):
 # SKIP_PREFLIGHT_CHECKS=true

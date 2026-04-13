@@ -43,7 +43,24 @@ export type QuestionBankUploadItem = {
   deduped_questions: number;
   /** True if Ollama generated decoys for at least one question in this PDF */
   used_ollama?: boolean;
+  /** True if Gemini extracted MCQs after regex parsing found none */
+  used_gemini?: boolean;
   error?: string | null;
+  needs_gemini_confirmation?: boolean;
+  pending_id?: string | null;
+  gemini_prompt_reason?: string | null;
+  /** True when multi-file batch skipped Gemini; re-upload these files one at a time */
+  suggest_upload_individually?: boolean;
+};
+
+export type QuestionBankConfirmGeminiResponse = {
+  ok: true;
+  file_id: number;
+  file_name: string;
+  inserted_questions: number;
+  deduped_questions: number;
+  used_ollama?: boolean;
+  used_gemini?: boolean;
 };
 
 export type QuestionBankUploadBatchResponse = {
@@ -139,3 +156,20 @@ export function uploadQuestionBanksWithProgress(
 }
 
 export const apiBase = API_BASE;
+
+export async function confirmQuestionBankGemini(
+  pendingId: string,
+  token: string,
+): Promise<QuestionBankConfirmGeminiResponse> {
+  return api<QuestionBankConfirmGeminiResponse>(
+    `/admin/question-banks/pending/${encodeURIComponent(pendingId)}/confirm-gemini`,
+    { method: 'POST', token },
+  );
+}
+
+export async function cancelPendingQuestionBank(pendingId: string, token: string): Promise<{ ok: boolean }> {
+  return api<{ ok: boolean }>(
+    `/admin/question-banks/pending/${encodeURIComponent(pendingId)}`,
+    { method: 'DELETE', token },
+  );
+}

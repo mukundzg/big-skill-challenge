@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import re
+import secrets
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,9 +18,13 @@ from app.core.app_logger import log_error, log_info, log_warn
 from app.core.service_guard import guarded_service
 from app.db import engine, session_scope
 from app.models import File, QuizQuestion
+from app.services.quiz_gemini import extract_question_bank_mcqs_via_gemini, gemini_api_key_configured
+from app.services.quiz_service import questions_per_attempt_for_question_bank
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 QBANKS_DIR = REPO_ROOT / "qbanks"
+QBANK_PENDING_DIR = QBANKS_DIR / "pending"
+PENDING_ID_RE = re.compile(r"^[A-Za-z0-9._-]{16,128}$")
 
 
 def _remove_qbank_pdf_after_processing(path: Path, *, file_name: str, outcome: str) -> None:
@@ -72,6 +79,20 @@ class UploadQuestionBankResult:
     inserted_questions: int
     deduped_questions: int
     used_ollama: bool = False
+    used_gemini: bool = False
+
+
+@dataclass
+class QuestionBankUploadOutcome:
+    """Result of POST upload: either stored rows, a fatal error, or a pending Gemini confirmation step."""
+
+    ok: bool
+    result: UploadQuestionBankResult | None = None
+    pending_gemini: bool = False
+    pending_id: str | None = None
+    gemini_prompt_reason: str | None = None
+    error_message: str | None = None
+    suggest_upload_individually: bool = False
 
 
 def _clean_text(s: str) -> str:
@@ -103,7 +124,11 @@ def _extract_pdf_text(pdf_path: Path) -> tuple[str, int]:
 
 
 _Q_SPLIT = re.compile(r"(?:^|\n)\s*(?:Q(?:uestion)?\s*)?(\d+)[\).:\-]\s+", re.IGNORECASE)
-_OPT_RE = re.compile(r"(?:^|\n)\s*([A-D])[\).:\-]\s+([^\n]+)", re.IGNORECASE)
+# Option lines: A. x / A) x / A: x / A x / A-x / A5 (letter glued to digit). "Answer:" is not matched (no delimiter after A).
+_OPT_RE = re.compile(
+    r"(?:^|\n)\s*([A-D])(?:(?:[\).:]\s*|\-\s*|\s+)|(?=\d))([^\n]+)",
+    re.IGNORECASE,
+)
 _BULLET_LINE = re.compile(r"^\s*-\s+(.+)$", re.MULTILINE)
 
 
@@ -188,6 +213,37 @@ def _parse_single_chunk(chunk: str) -> ParsedQuestion | None:
     if pq is not None:
         return pq
     return _parse_bullet_chunk(chunk)
+
+
+def _parsed_questions_from_gemini_rows(rows: list[dict[str, Any]]) -> list[ParsedQuestion]:
+    out: list[ParsedQuestion] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        q_text = _clean_text(str(row.get("question", "")))
+        if not q_text:
+            continue
+        raw_opts = row.get("options")
+        if not isinstance(raw_opts, list):
+            continue
+        options = [_clean_text(str(x)) for x in raw_opts]
+        options = [o for o in options if o]
+        if len(options) < 2:
+            continue
+        options = options[:4]
+        ci_raw = row.get("correct_index")
+        if isinstance(ci_raw, int) and not isinstance(ci_raw, bool):
+            correct_idx = max(0, min(len(options) - 1, ci_raw))
+        else:
+            ans = row.get("correct_answer")
+            if ans is None:
+                ans = row.get("answer")
+            correct_idx = _resolve_correct_index(
+                _clean_text(str(ans)) if ans is not None else None,
+                options,
+            )
+        out.append(ParsedQuestion(question=q_text, options=options, correct_index=correct_idx))
+    return out
 
 
 def _parse_questions_from_text(raw: str) -> list[ParsedQuestion]:
@@ -316,6 +372,264 @@ def _ensure_four_options(q: ParsedQuestion, *, file_name: str) -> tuple[ParsedQu
     return ParsedQuestion(question=q.question, options=opts[:4], correct_index=cidx), False
 
 
+def _register_pending_gemini_upload(
+    *,
+    source_pdf: Path,
+    stored_file_name: str,
+    original_file_name: str,
+    actor_user_id: int | None,
+    failure_reason: str,
+) -> str:
+    QBANK_PENDING_DIR.mkdir(parents=True, exist_ok=True)
+    pending_id = secrets.token_urlsafe(32)
+    dest_pdf = QBANK_PENDING_DIR / f"{pending_id}.pdf"
+    dest_meta = QBANK_PENDING_DIR / f"{pending_id}.json"
+    shutil.move(str(source_pdf.resolve()), str(dest_pdf))
+    meta = {
+        "original_file_name": original_file_name,
+        "stored_file_name": stored_file_name,
+        "actor_user_id": actor_user_id,
+        "failure_reason": failure_reason,
+    }
+    dest_meta.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    log_info(
+        "Question bank: pending Gemini confirmation registered",
+        pending_id=pending_id,
+        stored_file_name=stored_file_name,
+    )
+    return pending_id
+
+
+def _delete_pending_pair(pending_id: str) -> None:
+    if not PENDING_ID_RE.match(pending_id):
+        return
+    for ext in (".pdf", ".json"):
+        p = QBANK_PENDING_DIR / f"{pending_id}{ext}"
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _load_pending_meta(pending_id: str) -> dict[str, Any]:
+    if not PENDING_ID_RE.match(pending_id):
+        raise ValueError("Invalid pending id")
+    meta_path = QBANK_PENDING_DIR / f"{pending_id}.json"
+    if not meta_path.is_file():
+        raise FileNotFoundError("Unknown or expired pending upload")
+    return json.loads(meta_path.read_text(encoding="utf-8"))
+
+
+def pending_question_bank_pdf_path(pending_id: str) -> Path:
+    if not PENDING_ID_RE.match(pending_id):
+        raise ValueError("Invalid pending id")
+    p = (QBANK_PENDING_DIR / f"{pending_id}.pdf").resolve()
+    if p.parent != QBANK_PENDING_DIR.resolve():
+        raise ValueError("Invalid pending id")
+    if not p.is_file():
+        raise FileNotFoundError("Pending PDF missing or expired")
+    return p
+
+
+def _complete_upload_from_parsed(
+    *,
+    parsed: list[ParsedQuestion],
+    stored_file_name: str,
+    actor_user_id: int | None,
+    min_required: int,
+    used_gemini: bool,
+) -> UploadQuestionBankResult:
+    if not parsed:
+        raise ValueError("No questions to store")
+    log_info(
+        "Question bank: reading from file; questions and answers found",
+        file_name=stored_file_name,
+        parsed_blocks=len(parsed),
+        used_gemini=used_gemini,
+    )
+    ensured: list[tuple[ParsedQuestion, bool]] = [
+        _ensure_four_options(q, file_name=stored_file_name) for q in parsed
+    ]
+    parsed = [p for p, _ in ensured]
+    used_ollama = any(used for _, used in ensured)
+    q_texts = [q.question for q in parsed]
+    dup_idx = _dedup_indices_sentence_transformers(q_texts)
+    if dup_idx:
+        dedup_method = "sentence_transformers"
+    else:
+        try:
+            dup_idx = _dedup_indices_sklearn(q_texts)
+            dedup_method = "sklearn_tfidf" if dup_idx else "sentence_transformers_then_sklearn"
+        except Exception:
+            dup_idx = set()
+            dedup_method = "sentence_transformers_only_sklearn_failed"
+    filtered = [q for i, q in enumerate(parsed) if i not in dup_idx]
+    if not filtered:
+        raise ValueError("All parsed questions were duplicates")
+    log_info(
+        "Question bank: deduplication pass",
+        file_name=stored_file_name,
+        method=dedup_method,
+        before=len(parsed),
+        duplicates_removed=len(dup_idx),
+        after=len(filtered),
+    )
+    if len(filtered) < min_required:
+        raise ValueError(
+            f"After deduplication this PDF yields {len(filtered)} distinct question(s), but Quiz settings "
+            f"require at least {min_required} (questions per attempt). Add more distinct questions to the PDF "
+            f"or lower “Questions per attempt” in Quiz settings."
+        )
+    filtered = filtered[:min_required]
+
+    with session_scope() as session:
+        frow = File(
+            file_name=stored_file_name,
+            created_by=actor_user_id,
+            updated_by=actor_user_id,
+            is_deleted=False,
+        )
+        session.add(frow)
+        session.flush()
+        fid = int(frow.id)
+        log_info(
+            "Question bank: inserted files row",
+            file_id=fid,
+            file_name=stored_file_name,
+        )
+        inserted = 0
+        skipped_incomplete = 0
+        for q in filtered:
+            correct = q.options[q.correct_index]
+            decoys = [opt for i, opt in enumerate(q.options) if i != q.correct_index][:3]
+            if len(decoys) < 3:
+                skipped_incomplete += 1
+                continue
+            session.add(
+                QuizQuestion(
+                    file_id=fid,
+                    question_text=q.question,
+                    correct_answer=correct,
+                    decoy_1=decoys[0],
+                    decoy_2=decoys[1],
+                    decoy_3=decoys[2],
+                    is_active=True,
+                    is_deleted=False,
+                    created_by=actor_user_id,
+                    updated_by=actor_user_id,
+                )
+            )
+            inserted += 1
+        if inserted == 0 and filtered:
+            log_error(
+                "Question bank: no quiz_questions stored after parse (all candidates skipped)",
+                file_name=stored_file_name,
+                file_id=fid,
+                filtered_count=len(filtered),
+                skipped_incomplete=skipped_incomplete,
+            )
+            raise ValueError(
+                "No questions could be stored: every parsed question had fewer than 3 decoy answers after processing."
+            )
+        session.flush()
+        if skipped_incomplete:
+            log_info(
+                "Question bank: skipped questions with fewer than 3 decoys after parsing",
+                file_name=stored_file_name,
+                file_id=fid,
+                skipped_count=skipped_incomplete,
+            )
+        log_info(
+            "Question bank: inserted rows into quiz_questions",
+            file_id=fid,
+            file_name=stored_file_name,
+            rows_inserted=inserted,
+            table="quiz_questions",
+        )
+
+    log_info(
+        "Question bank: upload pipeline finished successfully",
+        file_name=stored_file_name,
+        file_id=fid,
+        questions_stored=inserted,
+        deduped_questions=len(dup_idx),
+        used_ollama=used_ollama,
+        used_gemini=used_gemini,
+    )
+    return UploadQuestionBankResult(
+        file_id=fid,
+        file_name=stored_file_name,
+        inserted_questions=inserted,
+        deduped_questions=len(dup_idx),
+        used_ollama=used_ollama,
+        used_gemini=used_gemini,
+    )
+
+
+@guarded_service("question_bank.cancel_pending_question_bank")
+def cancel_pending_question_bank(*, pending_id: str) -> None:
+    if not PENDING_ID_RE.match(pending_id):
+        raise ValueError("Invalid pending id")
+    _load_pending_meta(pending_id)
+    _delete_pending_pair(pending_id)
+    log_info("Question bank: pending Gemini upload cancelled", pending_id=pending_id)
+
+
+@guarded_service("question_bank.confirm_question_bank_gemini")
+def confirm_question_bank_gemini(*, pending_id: str, actor_user_id: int | None) -> UploadQuestionBankResult:
+    if engine() is None:
+        raise RuntimeError("Database not configured")
+    if not gemini_api_key_configured():
+        raise ValueError("GEM_KEY (or GOOGLE_API_KEY) is not set; Gemini extraction is unavailable.")
+    _load_pending_meta(pending_id)
+    pdf_path = pending_question_bank_pdf_path(pending_id)
+    pdf_bytes = pdf_path.read_bytes()
+    meta = _load_pending_meta(pending_id)
+    stored_file_name = str(meta.get("stored_file_name") or "upload.pdf")
+    min_required = questions_per_attempt_for_question_bank()
+
+    gem_rows: list[dict[str, Any]] = []
+    raw = ""
+    try:
+        raw, _ = _extract_pdf_text(pdf_path)
+    except Exception as e:
+        log_warn(
+            "Question bank: pdfplumber re-read failed before Gemini; will send PDF bytes only",
+            file_name=stored_file_name,
+            error=str(e),
+        )
+    if raw.strip():
+        try:
+            gem_rows = extract_question_bank_mcqs_via_gemini(text=raw, file_name=stored_file_name)
+        except Exception as e:
+            log_warn(
+                "Question bank: Gemini extraction from text failed (confirm flow)",
+                file_name=stored_file_name,
+                error=str(e),
+            )
+    if not gem_rows:
+        gem_rows = extract_question_bank_mcqs_via_gemini(
+            pdf_bytes=pdf_bytes,
+            file_name=stored_file_name,
+        )
+    parsed = _parsed_questions_from_gemini_rows(gem_rows)
+    if not parsed:
+        raise ValueError("Gemini could not extract any multiple-choice questions from this PDF.")
+    try:
+        result = _complete_upload_from_parsed(
+            parsed=parsed,
+            stored_file_name=stored_file_name,
+            actor_user_id=actor_user_id,
+            min_required=min_required,
+            used_gemini=True,
+        )
+    except Exception:
+        raise
+    else:
+        _delete_pending_pair(pending_id)
+    return result
+
+
 @guarded_service("question_bank.list_question_banks")
 def list_question_banks() -> list[dict[str, Any]]:
     if engine() is None:
@@ -348,8 +662,22 @@ def list_question_banks() -> list[dict[str, Any]]:
         return out
 
 
+def _batch_gemini_blocked_message(*, file_name: str, technical_detail: str) -> str:
+    return (
+        f"{technical_detail} When several PDFs are uploaded together, each one must succeed with the "
+        "built-in extractor. Upload this file alone to preview it and optionally confirm Gemini extraction: "
+        f'"{file_name}".'
+    )
+
+
 @guarded_service("question_bank.upload_question_bank")
-def upload_question_bank(*, file_name: str, content: bytes, actor_user_id: int | None) -> UploadQuestionBankResult:
+def upload_question_bank(
+    *,
+    file_name: str,
+    content: bytes,
+    actor_user_id: int | None,
+    allow_pending_gemini: bool = True,
+) -> QuestionBankUploadOutcome:
     if engine() is None:
         raise RuntimeError("Database not configured")
     if not content:
@@ -363,7 +691,6 @@ def upload_question_bank(*, file_name: str, content: bytes, actor_user_id: int |
     clean_name = _safe_filename(file_name)
     QBANKS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # make filename unique if already present
     target = QBANKS_DIR / clean_name
     stem = target.stem
     suffix = target.suffix
@@ -379,9 +706,42 @@ def upload_question_bank(*, file_name: str, content: bytes, actor_user_id: int |
         bytes=len(content),
     )
 
-    outcome = "processing_failed"
+    fin: dict[str, str] = {"outcome": "processing_failed"}
+    min_required = questions_per_attempt_for_question_bank()
     try:
-        raw, page_count = _extract_pdf_text(target)
+        try:
+            raw, page_count = _extract_pdf_text(target)
+        except Exception as ex:
+            msg = f"PDF text extraction failed ({ex.__class__.__name__}): {ex}"
+            log_warn(
+                "Question bank: pdfplumber extraction failed",
+                file_name=target.name,
+                error=str(ex),
+            )
+            if gemini_api_key_configured() and allow_pending_gemini:
+                pid = _register_pending_gemini_upload(
+                    source_pdf=target,
+                    stored_file_name=target.name,
+                    original_file_name=file_name,
+                    actor_user_id=actor_user_id,
+                    failure_reason=msg,
+                )
+                fin["outcome"] = "pending_gemini"
+                return QuestionBankUploadOutcome(
+                    ok=False,
+                    pending_gemini=True,
+                    pending_id=pid,
+                    gemini_prompt_reason=msg,
+                )
+            fin["outcome"] = "failed"
+            if gemini_api_key_configured() and not allow_pending_gemini:
+                return QuestionBankUploadOutcome(
+                    ok=False,
+                    error_message=_batch_gemini_blocked_message(file_name=file_name, technical_detail=msg),
+                    suggest_upload_individually=True,
+                )
+            return QuestionBankUploadOutcome(ok=False, error_message=msg)
+
         log_info(
             "Question bank: extracted text from PDF",
             file_name=target.name,
@@ -390,121 +750,60 @@ def upload_question_bank(*, file_name: str, content: bytes, actor_user_id: int |
         )
         parsed = _parse_questions_from_text(raw)
         if not parsed:
-            raise ValueError("No parsable multiple-choice questions found in PDF")
-        log_info(
-            "Question bank: reading from file; questions and answers found",
-            file_name=target.name,
-            parsed_blocks=len(parsed),
-        )
-
-        ensured: list[tuple[ParsedQuestion, bool]] = [
-            _ensure_four_options(q, file_name=target.name) for q in parsed
-        ]
-        parsed = [p for p, _ in ensured]
-        used_ollama = any(used for _, used in ensured)
-        q_texts = [q.question for q in parsed]
-        dup_idx = _dedup_indices_sentence_transformers(q_texts)
-        if dup_idx:
-            dedup_method = "sentence_transformers"
-        else:
-            try:
-                dup_idx = _dedup_indices_sklearn(q_texts)
-                dedup_method = "sklearn_tfidf" if dup_idx else "sentence_transformers_then_sklearn"
-            except Exception:
-                dup_idx = set()
-                dedup_method = "sentence_transformers_only_sklearn_failed"
-        filtered = [q for i, q in enumerate(parsed) if i not in dup_idx]
-        if not filtered:
-            raise ValueError("All parsed questions were duplicates")
-        log_info(
-            "Question bank: deduplication pass",
-            file_name=target.name,
-            method=dedup_method,
-            before=len(parsed),
-            duplicates_removed=len(dup_idx),
-            after=len(filtered),
-        )
-
-        with session_scope() as session:
-            frow = File(
-                file_name=target.name,
-                created_by=actor_user_id,
-                updated_by=actor_user_id,
-                is_deleted=False,
-            )
-            session.add(frow)
-            session.flush()
-            fid = int(frow.id)
-            log_info(
-                "Question bank: inserted files row",
-                file_id=fid,
-                file_name=target.name,
-            )
-            inserted = 0
-            skipped_incomplete = 0
-            for q in filtered:
-                correct = q.options[q.correct_index]
-                decoys = [opt for i, opt in enumerate(q.options) if i != q.correct_index][:3]
-                if len(decoys) < 3:
-                    skipped_incomplete += 1
-                    continue
-                session.add(
-                    QuizQuestion(
-                        file_id=fid,
-                        question_text=q.question,
-                        correct_answer=correct,
-                        decoy_1=decoys[0],
-                        decoy_2=decoys[1],
-                        decoy_3=decoys[2],
-                        is_active=True,
-                        is_deleted=False,
-                        created_by=actor_user_id,
-                        updated_by=actor_user_id,
-                    )
+            msg = "No parsable multiple-choice questions were found with the built-in PDF text extractor."
+            if not raw.strip():
+                msg = (
+                    "No text could be extracted from this PDF (it may be scanned, image-only, or protected)."
                 )
-                inserted += 1
-            if inserted == 0 and filtered:
-                log_error(
-                    "Question bank: no quiz_questions stored after parse (all candidates skipped)",
-                    file_name=target.name,
-                    file_id=fid,
-                    filtered_count=len(filtered),
-                    skipped_incomplete=skipped_incomplete,
+            log_warn("Question bank: regex parse produced no questions", file_name=target.name)
+            if gemini_api_key_configured() and allow_pending_gemini:
+                pid = _register_pending_gemini_upload(
+                    source_pdf=target,
+                    stored_file_name=target.name,
+                    original_file_name=file_name,
+                    actor_user_id=actor_user_id,
+                    failure_reason=msg,
                 )
-                raise ValueError(
-                    "No questions could be stored: every parsed question had fewer than 3 decoy answers after processing."
+                fin["outcome"] = "pending_gemini"
+                return QuestionBankUploadOutcome(
+                    ok=False,
+                    pending_gemini=True,
+                    pending_id=pid,
+                    gemini_prompt_reason=msg,
                 )
-            session.flush()
-            if skipped_incomplete:
-                log_info(
-                    "Question bank: skipped questions with fewer than 3 decoys after parsing",
-                    file_name=target.name,
-                    file_id=fid,
-                    skipped_count=skipped_incomplete,
+            fin["outcome"] = "failed"
+            if gemini_api_key_configured() and not allow_pending_gemini:
+                return QuestionBankUploadOutcome(
+                    ok=False,
+                    error_message=_batch_gemini_blocked_message(file_name=file_name, technical_detail=msg),
+                    suggest_upload_individually=True,
                 )
-            log_info(
-                "Question bank: inserted rows into quiz_questions",
-                file_id=fid,
-                file_name=target.name,
-                rows_inserted=inserted,
-                table="quiz_questions",
+            return QuestionBankUploadOutcome(
+                ok=False,
+                error_message=(
+                    f"{msg} Configure GEM_KEY (or GOOGLE_API_KEY) on the server to optionally extract "
+                    "with Google Gemini after you review the PDF in the admin console."
+                ),
             )
 
-        log_info(
-            "Question bank: upload pipeline finished successfully",
-            file_name=target.name,
-            file_id=fid,
-            questions_stored=inserted,
-            deduped_questions=len(dup_idx),
-            used_ollama=used_ollama,
-        )
-        outcome = "success"
-        return UploadQuestionBankResult(
-            file_id=fid,
-            file_name=target.name,
-            inserted_questions=inserted,
-            deduped_questions=len(dup_idx),
-            used_ollama=used_ollama,
-        )
+        try:
+            result = _complete_upload_from_parsed(
+                parsed=parsed,
+                stored_file_name=target.name,
+                actor_user_id=actor_user_id,
+                min_required=min_required,
+                used_gemini=False,
+            )
+        except ValueError as e:
+            fin["outcome"] = "failed"
+            return QuestionBankUploadOutcome(ok=False, error_message=str(e))
+
+        fin["outcome"] = "success"
+        return QuestionBankUploadOutcome(ok=True, result=result)
     finally:
-        _remove_qbank_pdf_after_processing(target, file_name=target.name, outcome=outcome)
+        if fin["outcome"] != "pending_gemini" and target.is_file():
+            _remove_qbank_pdf_after_processing(
+                target,
+                file_name=target.name,
+                outcome=fin["outcome"],
+            )

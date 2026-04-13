@@ -57,6 +57,7 @@ class QuizSettingsResponse(BaseModel):
     max_attempts: int
     time_per_question_seconds: int
     marks_per_question: int
+    questions_per_attempt: int
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -65,6 +66,7 @@ class QuizSettingsUpdateBody(BaseModel):
     max_attempts: int | None = Field(default=None, ge=1)
     time_per_question_seconds: int | None = Field(default=None, ge=5)
     marks_per_question: int | None = Field(default=None, ge=1)
+    questions_per_attempt: int | None = Field(default=None, ge=1, le=100)
 
 
 class AnalyticsSummaryResponse(BaseModel):
@@ -236,7 +238,22 @@ class QuestionBankUploadItemResult(BaseModel):
     inserted_questions: int = 0
     deduped_questions: int = 0
     used_ollama: bool = False
+    used_gemini: bool = False
     error: str | None = None
+    needs_gemini_confirmation: bool = False
+    pending_id: str | None = None
+    gemini_prompt_reason: str | None = None
+    suggest_upload_individually: bool = False
+
+
+class QuestionBankConfirmGeminiResponse(BaseModel):
+    ok: Literal[True] = True
+    file_id: int
+    file_name: str
+    inserted_questions: int
+    deduped_questions: int
+    used_ollama: bool = False
+    used_gemini: bool = True
 
 
 class QuestionBankUploadBatchResponse(BaseModel):

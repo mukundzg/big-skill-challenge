@@ -158,6 +158,9 @@ class QuizSettings(Base):
     marks_per_question: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default=text("10")
     )
+    questions_per_attempt: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("10")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )

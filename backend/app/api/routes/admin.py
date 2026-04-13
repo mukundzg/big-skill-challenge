@@ -6,6 +6,7 @@ import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 # Multipart parts from `request.form()` are Starlette UploadFile; FastAPI's UploadFile is a different class.
 from starlette.datastructures import UploadFile
@@ -29,6 +30,7 @@ from app.schemas.admin import (
     QuizSettingsUpdateBody,
     QuestionBanksResponse,
     QuestionBankRow,
+    QuestionBankConfirmGeminiResponse,
     QuestionBankUploadBatchResponse,
     QuestionBankUploadItemResult,
     RegisterAdminsResponse,
@@ -56,7 +58,13 @@ from app.services.content_analysis_service import (
     update_score_human_review,
 )
 from app.services.quiz_service import get_quiz_settings_admin, update_quiz_settings_row
-from app.services.question_bank_service import list_question_banks, upload_question_bank
+from app.services.question_bank_service import (
+    cancel_pending_question_bank,
+    confirm_question_bank_gemini,
+    list_question_banks,
+    pending_question_bank_pdf_path,
+    upload_question_bank,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 _bearer = HTTPBearer(auto_error=False)
@@ -278,6 +286,7 @@ async def upload_question_bank_admin(
         queue_total=total,
         actor_user_id=actor,
     )
+    allow_pending_gemini = total == 1
     for position, uf in enumerate(queue, start=1):
         name = (uf.filename or "").strip() or "unknown.pdf"
         if not name.lower().endswith(".pdf"):
@@ -311,27 +320,71 @@ async def upload_question_bank_admin(
                 bytes=len(raw),
                 actor_user_id=actor,
             )
-            out = upload_question_bank(file_name=name, content=raw, actor_user_id=actor)
-            log_info(
-                "Admin API: question bank upload completed",
-                file_id=out.file_id,
-                file_name=out.file_name,
-                inserted_questions=out.inserted_questions,
-                deduped_questions=out.deduped_questions,
-                used_ollama=out.used_ollama,
+            uo = upload_question_bank(
+                file_name=name,
+                content=raw,
+                actor_user_id=actor,
+                allow_pending_gemini=allow_pending_gemini,
             )
-            items.append(
-                QuestionBankUploadItemResult(
-                    original_file_name=name,
-                    success=True,
+            if uo.pending_gemini and uo.pending_id:
+                items.append(
+                    QuestionBankUploadItemResult(
+                        original_file_name=name,
+                        success=False,
+                        needs_gemini_confirmation=True,
+                        pending_id=uo.pending_id,
+                        gemini_prompt_reason=uo.gemini_prompt_reason,
+                    )
+                )
+                failed += 1
+                log_info(
+                    "Admin API: question bank upload awaiting Gemini confirmation",
+                    file_name=name,
+                    pending_id=uo.pending_id,
+                    actor_user_id=actor,
+                )
+                continue
+            if uo.ok and uo.result is not None:
+                out = uo.result
+                log_info(
+                    "Admin API: question bank upload completed",
                     file_id=out.file_id,
                     file_name=out.file_name,
                     inserted_questions=out.inserted_questions,
                     deduped_questions=out.deduped_questions,
                     used_ollama=out.used_ollama,
+                    used_gemini=out.used_gemini,
                 )
-            )
-            succeeded += 1
+                items.append(
+                    QuestionBankUploadItemResult(
+                        original_file_name=name,
+                        success=True,
+                        file_id=out.file_id,
+                        file_name=out.file_name,
+                        inserted_questions=out.inserted_questions,
+                        deduped_questions=out.deduped_questions,
+                        used_ollama=out.used_ollama,
+                        used_gemini=out.used_gemini,
+                    )
+                )
+                succeeded += 1
+            else:
+                failed += 1
+                items.append(
+                    QuestionBankUploadItemResult(
+                        original_file_name=name,
+                        success=False,
+                        error=uo.error_message or "Upload failed",
+                        suggest_upload_individually=uo.suggest_upload_individually,
+                    )
+                )
+                log_info(
+                    "Admin API: question bank queue item failed",
+                    position=position,
+                    queue_total=total,
+                    file_name=name,
+                    error=uo.error_message,
+                )
         except ValueError as e:
             failed += 1
             items.append(
@@ -373,6 +426,74 @@ async def upload_question_bank_admin(
         actor_user_id=actor,
     )
     return QuestionBankUploadBatchResponse(items=items, succeeded=succeeded, failed=failed)
+
+
+@router.get("/question-banks/pending/{pending_id}/pdf")
+def get_pending_question_bank_pdf(
+    pending_id: str,
+    token: Annotated[str, Depends(_auth_header)],
+):
+    try:
+        admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    try:
+        path = pending_question_bank_pdf_path(pending_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="Pending upload not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return FileResponse(
+        str(path),
+        media_type="application/pdf",
+        filename="preview.pdf",
+        headers={"Content-Disposition": 'inline; filename="preview.pdf"'},
+    )
+
+
+@router.post("/question-banks/pending/{pending_id}/confirm-gemini", response_model=QuestionBankConfirmGeminiResponse)
+def confirm_pending_question_bank_gemini(
+    pending_id: str,
+    token: Annotated[str, Depends(_auth_header)],
+):
+    try:
+        actor = admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    try:
+        result = confirm_question_bank_gemini(pending_id=pending_id, actor_user_id=actor)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="Pending upload not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return QuestionBankConfirmGeminiResponse(
+        file_id=result.file_id,
+        file_name=result.file_name,
+        inserted_questions=result.inserted_questions,
+        deduped_questions=result.deduped_questions,
+        used_ollama=result.used_ollama,
+        used_gemini=result.used_gemini,
+    )
+
+
+@router.delete("/question-banks/pending/{pending_id}", response_model=OkResponse)
+def delete_pending_question_bank_admin(
+    pending_id: str,
+    token: Annotated[str, Depends(_auth_header)],
+):
+    try:
+        admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    try:
+        cancel_pending_question_bank(pending_id=pending_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="Pending upload not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return OkResponse(ok=True)
 
 
 @router.post("/content-subjects", response_model=ContentSubjectRow)
@@ -442,6 +563,7 @@ def admin_put_quiz_settings(
         body.max_attempts is None
         and body.time_per_question_seconds is None
         and body.marks_per_question is None
+        and body.questions_per_attempt is None
     ):
         raise HTTPException(status_code=400, detail="Provide at least one field to update")
     try:
@@ -449,6 +571,7 @@ def admin_put_quiz_settings(
             max_attempts=body.max_attempts,
             time_per_question_seconds=body.time_per_question_seconds,
             marks_per_question=body.marks_per_question,
+            questions_per_attempt=body.questions_per_attempt,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
