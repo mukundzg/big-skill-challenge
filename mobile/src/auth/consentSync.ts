@@ -2,7 +2,7 @@ import { fetchConsentStatus } from '../api/auth';
 import { hasAcceptedConsents, markConsentsAccepted } from './consentStorage';
 
 /**
- * True if the user should go to QuizHome (consent already recorded on server or cached locally).
+ * True if the user should go to Dashboard (consent already recorded on server or cached locally).
  * Syncs local cache when the server reports consent.
  */
 export async function shouldSkipConsentScreen(email: string): Promise<boolean> {

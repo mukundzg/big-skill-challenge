@@ -9,6 +9,7 @@ export type QuizDashboard = {
   attempts_remaining: number;
   total_correct_answers: number;
   total_score: number;
+  shortlisted: number;
 };
 
 export type QuizStartResult = {
