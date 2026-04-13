@@ -14,7 +14,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { AuthApiError, requestVerificationCode as sendOtp, verifyCode as verifyOtp } from '../api/auth';
+import { AuthApiError, isUserNotFoundError, requestVerificationCode as sendOtp, verifyCode as verifyOtp } from '../api/auth';
 import { useEffect, useRef } from 'react';
 import type { RootStackParamList } from '../navigation/types';
 import { clearSession, saveLoggedInSession } from '../auth/session';
@@ -159,12 +159,13 @@ export function SignInScreen({ navigation }: Props) {
           userId: res.user_id,
           isActive: true,
         });
-        if (res.has_consent === true) {
+        const skipConsent = res.has_consent === true;
+        if (skipConsent) {
           await markConsentsAccepted(normalizedEmail);
         }
         navigation.reset({
           index: 0,
-          routes: [{ name: 'Splash' }],
+          routes: [{ name: skipConsent ? 'Dashboard' : 'Consent' }],
         });
       } else {
         await clearSession();
@@ -175,6 +176,14 @@ export function SignInScreen({ navigation }: Props) {
       }
     } catch (e) {
       console.log('error', e);
+      if (isUserNotFoundError(e)) {
+        await clearSession();
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'SignIn', params: { fromUserNotFound: true } }],
+        });
+        return;
+      }
       if (e instanceof AuthApiError) {
         setError(e.message);
       } else {

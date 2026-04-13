@@ -1,7 +1,7 @@
 export type RootStackParamList = {
   Splash: undefined;
   /** Email entry / registration: set `fromUserNotFound` when server has no user row. */
-  SignIn: undefined;
+  SignIn: { fromUserNotFound: boolean };
   VerifyCode: { email: string };
   Consent: undefined;
   Payment: undefined;

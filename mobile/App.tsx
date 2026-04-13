@@ -12,7 +12,6 @@ import { QuizCompleteScreen } from './src/screens/QuizCompleteScreen';
 import { QuizPlayScreen } from './src/screens/QuizPlayScreen';
 import { QuizPrepareScreen } from './src/screens/QuizPrepareScreen';
 import { Consent } from './src/screens/Consent';
-import { VerifyCodeScreen } from './src/screens/VerifyCodeScreen';
 import { PaymentScreen } from './src/screens/PaymentScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -44,11 +43,6 @@ export default function App() {
           <Stack.Screen
             name="SignIn"
             component={SignInScreen}
-            options={{ headerShown: false }}
-          />
-          <Stack.Screen
-            name="VerifyCode"
-            component={VerifyCodeScreen}
             options={{ headerShown: false }}
           />
           <Stack.Screen

@@ -532,7 +532,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.1)',
     borderRadius: 14,
     padding: 14,
-    marginHorizontal: 16,
     marginBottom: 14,
   },
   cdownLabel: {

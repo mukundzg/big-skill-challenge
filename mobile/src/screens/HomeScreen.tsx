@@ -145,7 +145,7 @@ export function HomeScreen({ navigation }: Props) {
         />
         <Pressable
           style={styles.signInBtn}
-          onPress={() => navigation.navigate("SignIn")}
+          onPress={() => navigation.navigate("SignIn", { fromUserNotFound: false })}
         >
           <Text style={styles.signInBtnText}>Sign In</Text>
         </Pressable>
