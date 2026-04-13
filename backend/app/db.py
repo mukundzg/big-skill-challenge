@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Callable, Iterator, TypeVar
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
+
+from app.core.app_logger import log_error
+
+T = TypeVar("T")
 
 
 def _database_url() -> str | None:
@@ -75,6 +79,37 @@ _ENGINE = None
 _SessionLocal = None
 
 
+def _assert_required_tables() -> None:
+    eng = _ENGINE
+    if eng is None:
+        return
+    required_tables = ("score_review_history", "audit_logs_adjudiction")
+    try:
+        with eng.connect() as conn:
+            db_name = conn.execute(text("SELECT DATABASE()")).scalar()
+            if not db_name:
+                raise RuntimeError("No active database selected")
+            for table_name in required_tables:
+                exists = conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(1)
+                        FROM information_schema.TABLES
+                        WHERE TABLE_SCHEMA = :schema_name AND TABLE_NAME = :table_name
+                        """
+                    ),
+                    {"schema_name": db_name, "table_name": table_name},
+                ).scalar()
+                if not exists:
+                    raise RuntimeError(
+                        f"Required table '{table_name}' is missing. "
+                        "Create required tables via migrations before startup."
+                    )
+    except Exception as e:
+        log_error("Required DB table validation failed", exc=e)
+        raise
+
+
 def init_engine() -> None:
     global _ENGINE, _SessionLocal
 
@@ -85,8 +120,15 @@ def init_engine() -> None:
     if not url:
         return
 
-    _ENGINE = create_engine(url, **_pool_kwargs())
-    _SessionLocal = sessionmaker(bind=_ENGINE, autoflush=False, autocommit=False)
+    try:
+        _ENGINE = create_engine(url, **_pool_kwargs())
+        _SessionLocal = sessionmaker(bind=_ENGINE, autoflush=False, autocommit=False)
+        _assert_required_tables()
+    except Exception as e:
+        log_error("Database engine initialization failed", exc=e)
+        _ENGINE = None
+        _SessionLocal = None
+        raise
 
 
 def engine():
@@ -111,3 +153,16 @@ def session_scope() -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+def run_in_transaction(work: Callable[[Session], T], *, operation: str = "db_operation") -> T:
+    """
+    Generic transactional wrapper for service-layer DB writes/reads.
+    Commits on success, rolls back automatically on error via session_scope().
+    """
+    try:
+        with session_scope() as session:
+            return work(session)
+    except Exception as e:
+        log_error("Database transaction failed", exc=e, operation=operation)
+        raise

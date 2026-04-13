@@ -24,9 +24,9 @@ export function SplashScreen({ navigation }: Props) {
       if (cancelled) return;
       if (session != null && isLoggedIn(session)) {
         const consentsOk = await shouldSkipConsentScreen(session.email);
-        navigation.replace(consentsOk ? 'QuizHome' : 'Home');
+        navigation.replace(consentsOk ? 'Dashboard' : 'Consent');
       } else {
-        navigation.replace('Landing', {});
+        navigation.replace('Home');
       }
     })();
     return () => {

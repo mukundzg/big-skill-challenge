@@ -3,14 +3,17 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import type { RootStackParamList } from './src/navigation/types';
-import { HomeScreen } from './src/screens/HomeScreen';
-import { LandingScreen } from './src/screens/LandingScreen';
 import { SplashScreen } from './src/screens/SplashScreen';
+import { HomeScreen } from './src/screens/HomeScreen';
+import { SignInScreen } from './src/screens/SignInScreen';
 import { InactiveAccountScreen } from './src/screens/InactiveAccountScreen';
-import { QuizHomeScreen } from './src/screens/QuizHomeScreen';
+import { DashboardScreen } from './src/screens/DashboardScreen';
 import { QuizCompleteScreen } from './src/screens/QuizCompleteScreen';
 import { QuizPlayScreen } from './src/screens/QuizPlayScreen';
 import { QuizPrepareScreen } from './src/screens/QuizPrepareScreen';
+import { Consent } from './src/screens/Consent';
+import { VerifyCodeScreen } from './src/screens/VerifyCodeScreen';
+import { PaymentScreen } from './src/screens/PaymentScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -34,19 +37,34 @@ export default function App() {
             options={{ headerShown: false }}
           />
           <Stack.Screen
-            name="Landing"
-            component={LandingScreen}
-            options={{ headerShown: false }}
-          />
-          <Stack.Screen
             name="Home"
             component={HomeScreen}
             options={{ headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
-            name="QuizHome"
-            component={QuizHomeScreen}
-            options={{ title: 'Quiz', headerShown: true, gestureEnabled: false }}
+            name="SignIn"
+            component={SignInScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="VerifyCode"
+            component={VerifyCodeScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Consent"
+            component={Consent}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Payment"
+            component={PaymentScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Dashboard"
+            component={DashboardScreen}
+            options={{ title: 'Dashboard', headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
             name="QuizPrepare"

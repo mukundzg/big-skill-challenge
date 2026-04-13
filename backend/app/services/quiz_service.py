@@ -11,17 +11,20 @@ from typing import Any
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.core.service_guard import guarded_service
 from app.db import engine, session_scope
 from app.models import (
     AttemptQuestionTiming,
     File,
     QuizAttempt,
     QuizSettings,
+    User,
     UserFileMapping,
 )
 from app.services.quiz_gemini import QBANKS_DIR, load_and_build_quiz
 
 
+@guarded_service("quiz.sync_qbank_files")
 def sync_qbank_files() -> int:
     """Insert `files` rows for each PDF in /qbanks (idempotent)."""
     if engine() is None or not QBANKS_DIR.is_dir():
@@ -52,6 +55,7 @@ def _get_settings_row(session: Session) -> QuizSettings:
     return row
 
 
+@guarded_service("quiz.get_settings")
 def get_settings() -> dict[str, int]:
     if engine() is None:
         return {
@@ -68,6 +72,33 @@ def get_settings() -> dict[str, int]:
         }
 
 
+@guarded_service("quiz.get_quiz_settings_admin")
+def get_quiz_settings_admin() -> dict[str, Any]:
+    """Full quiz_settings row for admin UI."""
+    if engine() is None:
+        return {
+            "id": 1,
+            "max_attempts": 3,
+            "time_per_question_seconds": 60,
+            "marks_per_question": 10,
+            "created_at": None,
+            "updated_at": None,
+        }
+    with session_scope() as session:
+        s = _get_settings_row(session)
+        ca = s.created_at
+        ua = s.updated_at
+        return {
+            "id": int(s.id),
+            "max_attempts": int(s.max_attempts),
+            "time_per_question_seconds": int(s.time_per_question_seconds),
+            "marks_per_question": int(s.marks_per_question),
+            "created_at": ca.isoformat() if ca else None,
+            "updated_at": ua.isoformat() if ua else None,
+        }
+
+
+@guarded_service("quiz.get_dashboard_stats")
 def get_dashboard_stats(user_id: int) -> dict[str, Any]:
     settings = get_settings()
     if engine() is None:
@@ -142,6 +173,7 @@ class StartAttemptResult:
     error: str | None = None
 
 
+@guarded_service("quiz.start_attempt")
 def start_attempt(user_id: int) -> StartAttemptResult:
     if engine() is None:
         return StartAttemptResult(ok=False, error="Database not configured")
@@ -228,6 +260,7 @@ def _get_attempt_for_user(
     return row
 
 
+@guarded_service("quiz.get_question_for_attempt")
 def get_question_for_attempt(
     attempt_id: int, user_id: int, question_index: int
 ) -> dict[str, Any] | None:
@@ -270,6 +303,7 @@ def _finalize_score(correct: int, settings: QuizSettings) -> Decimal:
     return Decimal(str(correct * marks))
 
 
+@guarded_service("quiz.submit_answer")
 def submit_answer(
     attempt_id: int, user_id: int, question_index: int, selected_option_index: int
 ) -> dict[str, Any]:
@@ -345,6 +379,7 @@ def submit_answer(
         }
 
 
+@guarded_service("quiz.timeout_attempt")
 def timeout_attempt(attempt_id: int, user_id: int) -> dict[str, Any]:
     if engine() is None:
         return {"ok": False, "error": "no_database"}
@@ -364,3 +399,140 @@ def timeout_attempt(attempt_id: int, user_id: int) -> dict[str, Any]:
             "total_questions": int(att.total_questions or 0),
             "score": float(att.score or 0),
         }
+
+
+@guarded_service("quiz.update_quiz_settings_row")
+def update_quiz_settings_row(
+    *,
+    max_attempts: int | None = None,
+    time_per_question_seconds: int | None = None,
+    marks_per_question: int | None = None,
+) -> dict[str, Any]:
+    """Persist quiz_settings row id=1 (admin)."""
+    if engine() is None:
+        raise RuntimeError("Database not configured")
+    if max_attempts is not None and max_attempts < 1:
+        raise ValueError("max_attempts must be >= 1")
+    if time_per_question_seconds is not None and time_per_question_seconds < 5:
+        raise ValueError("time_per_question_seconds must be >= 5")
+    if marks_per_question is not None and marks_per_question < 1:
+        raise ValueError("marks_per_question must be >= 1")
+
+    with session_scope() as session:
+        row = _get_settings_row(session)
+        if max_attempts is not None:
+            row.max_attempts = max_attempts
+        if time_per_question_seconds is not None:
+            row.time_per_question_seconds = time_per_question_seconds
+        if marks_per_question is not None:
+            row.marks_per_question = marks_per_question
+        session.flush()
+
+    return get_quiz_settings_admin()
+
+
+@guarded_service("quiz.get_analytics_summary")
+def get_analytics_summary() -> dict[str, Any]:
+    """Aggregate stats over attempts (scores live on attempts)."""
+    if engine() is None:
+        return {
+            "total_attempts": 0,
+            "by_status": {},
+            "average_score": None,
+            "total_score_sum": 0.0,
+            "distinct_users": 0,
+        }
+
+    with session_scope() as session:
+        total = session.execute(select(func.count()).select_from(QuizAttempt)).scalar_one()
+        total = int(total or 0)
+
+        status_rows = session.execute(
+            select(QuizAttempt.status, func.count())
+            .group_by(QuizAttempt.status)
+        ).all()
+        by_status: dict[str, int] = {}
+        for st, c in status_rows:
+            if st:
+                by_status[str(st)] = int(c or 0)
+
+        avg_score = session.execute(
+            select(func.avg(QuizAttempt.score)).where(QuizAttempt.score.isnot(None))
+        ).scalar_one()
+        avg_f = float(avg_score) if avg_score is not None else None
+
+        sum_score = session.execute(
+            select(func.coalesce(func.sum(QuizAttempt.score), 0))
+        ).scalar_one()
+        sum_f = float(sum_score or 0)
+
+        distinct_users = session.execute(
+            select(func.count(func.distinct(QuizAttempt.user_id))).select_from(QuizAttempt)
+        ).scalar_one()
+        distinct_users = int(distinct_users or 0)
+
+        return {
+            "total_attempts": total,
+            "by_status": by_status,
+            "average_score": avg_f,
+            "total_score_sum": sum_f,
+            "distinct_users": distinct_users,
+        }
+
+
+@guarded_service("quiz.list_attempts_analytics")
+def list_attempts_analytics(
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Paginated quiz attempts with user email for admin analytics."""
+    if engine() is None:
+        return [], 0
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+
+    with session_scope() as session:
+        base = select(QuizAttempt, User.email).join(User, QuizAttempt.user_id == User.id)
+        count_q = select(func.count()).select_from(QuizAttempt)
+        if status:
+            base = base.where(QuizAttempt.status == status)
+            count_q = count_q.where(QuizAttempt.status == status)
+
+        total = session.execute(count_q).scalar_one()
+        total = int(total or 0)
+
+        stmt = (
+            base.order_by(QuizAttempt.created_at.desc()).limit(limit).offset(offset)
+        )
+        rows = session.execute(stmt).all()
+
+        out: list[dict[str, Any]] = []
+        for att, email in rows:
+            ca = att.created_at
+            ua = att.updated_at
+            sc = att.score
+            time_taken_seconds: int | None = None
+            if ca is not None and ua is not None:
+                try:
+                    time_taken_seconds = int((ua - ca).total_seconds())
+                except Exception:
+                    time_taken_seconds = None
+            out.append(
+                {
+                    "id": int(att.id),
+                    "user_id": int(att.user_id),
+                    "email": str(email),
+                    "attempt_number": int(att.attempt_number),
+                    "status": str(att.status),
+                    "score": float(sc) if sc is not None else None,
+                    "total_questions": int(att.total_questions or 0),
+                    "correct_answers": int(att.correct_answers or 0),
+                    "created_at": ca.isoformat() if ca else None,
+                    "updated_at": ua.isoformat() if ua else None,
+                    "time_taken_seconds": time_taken_seconds,
+                }
+            )
+        return out, total

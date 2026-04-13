@@ -123,7 +123,7 @@ export function VerifyCodeScreen({ navigation, route }: Props) {
         }
         navigation.reset({
           index: 0,
-          routes: [{ name: skipConsent ? 'QuizHome' : 'Home' }],
+          routes: [{ name: skipConsent ? 'Dashboard' : 'Home' }],
         });
       } else {
         await clearSession();

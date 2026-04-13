@@ -1,10 +1,13 @@
 export type RootStackParamList = {
   Splash: undefined;
   /** Email entry / registration: set `fromUserNotFound` when server has no user row. */
-  Landing: { fromUserNotFound?: boolean };
+  SignIn: undefined;
+  VerifyCode: { email: string };
+  Consent: undefined;
+  Payment: undefined;
   Home: undefined;
   /** Quiz dashboard after consents (default landing when consents already accepted) */
-  QuizHome: undefined;
+  Dashboard: undefined;
   /** PDF + Gemini loading before QuizPlay */
   QuizPrepare: { email: string };
   QuizPlay: {

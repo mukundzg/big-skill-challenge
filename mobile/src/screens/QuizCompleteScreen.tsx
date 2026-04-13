@@ -16,7 +16,7 @@ export function QuizCompleteScreen({ navigation }: Props) {
       </Text>
       <Pressable
         accessibilityRole="button"
-        onPress={() => navigation.reset({ index: 0, routes: [{ name: 'QuizHome' }] })}
+        onPress={() => navigation.reset({ index: 0, routes: [{ name: 'Dashboard' }] })}
         style={({ pressed }) => [styles.btn, pressed && styles.pressed]}
       >
         <Text style={styles.btnLabel}>Back to quiz home</Text>

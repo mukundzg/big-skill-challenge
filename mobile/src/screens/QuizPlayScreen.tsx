@@ -39,7 +39,7 @@ export function QuizPlayScreen({ navigation, route }: Props) {
   }, []);
 
   const goHome = useCallback(() => {
-    navigation.reset({ index: 0, routes: [{ name: 'QuizHome' }] });
+    navigation.reset({ index: 0, routes: [{ name: 'Dashboard' }] });
   }, [navigation]);
 
   const goComplete = useCallback(() => {

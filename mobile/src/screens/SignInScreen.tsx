@@ -15,13 +15,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthApiError, requestVerificationCode as sendOtp, verifyCode as verifyOtp } from '../api/auth';
-import { markConsentsAccepted } from '../auth/consentStorage';
-import { clearSession, saveLoggedInSession } from '../auth/session';
 import { useEffect, useRef } from 'react';
 import type { RootStackParamList } from '../navigation/types';
+import { clearSession, saveLoggedInSession } from '../auth/session';
+import { markConsentsAccepted } from '../auth/consentStorage';
 
 type Props = {
-  navigation: NativeStackNavigationProp<RootStackParamList, 'Landing'>;
+  navigation: NativeStackNavigationProp<RootStackParamList, 'SignIn'>;
 };
 
 function isValidEmail(s: string): boolean {
@@ -73,7 +73,7 @@ function StarBackground() {
   );
 }
 
-export function LandingScreen({ navigation }: Props) {
+export function SignInScreen({ navigation }: Props) {
   const [activeTab, setActiveTab] = useState<'register' | 'login'>('register');
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
@@ -84,6 +84,7 @@ export function LandingScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [resendTimer, setResendTimer] = useState(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const otpInputRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (resendTimer > 0) {
@@ -101,7 +102,7 @@ export function LandingScreen({ navigation }: Props) {
   const isFormValid = useMemo(() => {
     const trimmedEmail = email.trim();
     const hasValidEmail = isValidEmail(trimmedEmail);
-    const hasValidOtp = otp.trim().length === 7;
+    const hasValidOtp = otp.trim().length === 7; // Matching VerifyCodeScreen.tsx standard
 
     if (!isOtpSent) {
       if (activeTab === 'register') {
@@ -203,7 +204,7 @@ export function LandingScreen({ navigation }: Props) {
   return (
     <View style={styles.root}>
       <LinearGradient
-        colors={['#08002E', '#12006E', '#1A0A7C']}
+        colors={['#1e3c72', '#2a5298', '#20e2d7']}
         style={StyleSheet.absoluteFill}
       />
       <StarBackground />
@@ -213,6 +214,16 @@ export function LandingScreen({ navigation }: Props) {
         style={{ flex: 1 }}
       >
         <View style={styles.header}>
+          <Pressable
+            onPress={() => navigation.navigate('Home')}
+            style={styles.homeBtn}
+            hitSlop={15}
+          >
+            <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <Path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              <Path d="M9 22V12h6v10" />
+            </Svg>
+          </Pressable>
           <Image
             source={require('../../assets/images/prize-hero.png')}
             style={styles.logo}
@@ -268,7 +279,7 @@ export function LandingScreen({ navigation }: Props) {
           {isOtpSent && (
             <View style={styles.field}>
               <View style={styles.labelRow}>
-                <Text style={styles.label}>Enter OTP</Text>
+                <Text style={styles.label}>Enter 7-digit verification code</Text>
                 {resendTimer > 0 ? (
                   <Text style={styles.resendText}>Resend in {resendTimer}s</Text>
                 ) : (
@@ -277,18 +288,38 @@ export function LandingScreen({ navigation }: Props) {
                   </Pressable>
                 )}
               </View>
+
+              {/* Segmented OTP Input */}
+              <Pressable
+                style={styles.otpContainer}
+                onPress={() => otpInputRef.current?.focus()}
+              >
+                {Array.from({ length: 7 }).map((_, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      styles.otpBox,
+                      otp.length === i && styles.otpBoxActive,
+                      otp.length > i && styles.otpBoxFilled,
+                    ]}
+                  >
+                    <Text style={styles.otpText}>{otp[i] || ''}</Text>
+                  </View>
+                ))}
+              </Pressable>
+
               <TextInput
+                ref={otpInputRef}
                 autoComplete="one-time-code"
                 autoCorrect={false}
                 editable={!loading}
                 keyboardType="default"
-                onChangeText={(t) => setOtp(t.toUpperCase())}
-                placeholder="7-character code"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-                style={styles.input}
+                onChangeText={(t) => setOtp(t.toUpperCase().slice(0, 7))}
                 value={otp}
                 maxLength={7}
                 autoCapitalize="characters"
+                style={styles.hiddenInput}
+                caretHidden
               />
             </View>
           )}
@@ -385,6 +416,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     zIndex: 40,
+    flexDirection: 'row',
+  },
+  homeBtn: {
+    position: 'absolute',
+    left: 16,
+    zIndex: 50,
   },
   logo: {
     height: 24,
@@ -457,6 +494,40 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.03)',
     borderColor: 'rgba(255,255,255,0.1)',
     color: 'rgba(255,255,255,0.35)',
+  },
+  otpContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 4,
+  },
+  otpBox: {
+    flex: 1,
+    height: 54,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  otpBoxActive: {
+    borderColor: '#F59E0B',
+    backgroundColor: 'rgba(245,158,11,0.05)',
+  },
+  otpBoxFilled: {
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+  otpText: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#fff',
+  },
+  hiddenInput: {
+    position: 'absolute',
+    width: 0,
+    height: 0,
+    opacity: 0,
   },
   labelRow: {
     flexDirection: 'row',
