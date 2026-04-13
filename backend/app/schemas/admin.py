@@ -57,6 +57,7 @@ class QuizSettingsResponse(BaseModel):
     max_attempts: int
     time_per_question_seconds: int
     marks_per_question: int
+    questions_per_attempt: int
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -65,6 +66,7 @@ class QuizSettingsUpdateBody(BaseModel):
     max_attempts: int | None = Field(default=None, ge=1)
     time_per_question_seconds: int | None = Field(default=None, ge=5)
     marks_per_question: int | None = Field(default=None, ge=1)
+    questions_per_attempt: int | None = Field(default=None, ge=1, le=100)
 
 
 class AnalyticsSummaryResponse(BaseModel):
@@ -209,3 +211,53 @@ class ContentSubjectRow(BaseModel):
 
 class ContentSubjectsResponse(BaseModel):
     subjects: list[ContentSubjectRow]
+
+
+class QuestionBankRow(BaseModel):
+    id: int
+    file_name: str
+    created_at: str | None = None
+    created_by: int | None = None
+    updated_at: str | None = None
+    updated_by: int | None = None
+    is_deleted: bool
+    question_count: int = 0
+
+
+class QuestionBanksResponse(BaseModel):
+    rows: list[QuestionBankRow]
+
+
+class QuestionBankUploadItemResult(BaseModel):
+    """One PDF in a batch upload (processed sequentially in queue order)."""
+
+    original_file_name: str
+    success: bool
+    file_id: int | None = None
+    file_name: str | None = None
+    inserted_questions: int = 0
+    deduped_questions: int = 0
+    used_ollama: bool = False
+    used_gemini: bool = False
+    error: str | None = None
+    needs_gemini_confirmation: bool = False
+    pending_id: str | None = None
+    gemini_prompt_reason: str | None = None
+    suggest_upload_individually: bool = False
+
+
+class QuestionBankConfirmGeminiResponse(BaseModel):
+    ok: Literal[True] = True
+    file_id: int
+    file_name: str
+    inserted_questions: int
+    deduped_questions: int
+    used_ollama: bool = False
+    used_gemini: bool = True
+
+
+class QuestionBankUploadBatchResponse(BaseModel):
+    ok: Literal[True] = True
+    items: list[QuestionBankUploadItemResult]
+    succeeded: int
+    failed: int

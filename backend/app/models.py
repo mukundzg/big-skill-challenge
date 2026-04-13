@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, JSON, Numeric, String, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -73,6 +74,22 @@ class AuditLog(Base):
         BigInteger, ForeignKey("users.id"), nullable=True
     )
     action: Mapped[str] = mapped_column(String(255), nullable=False)
+    agent_name: Mapped[str] = mapped_column(
+        String(255), nullable=False, server_default=text("'system'")
+    )
+    # MySQL column type JSON — empty string is invalid; use {} / JSON_OBJECT() default.
+    audit_input: Mapped[dict[str, Any] | list[Any]] = mapped_column(
+        "input",
+        JSON,
+        nullable=False,
+        server_default=text("(JSON_OBJECT())"),
+    )
+    audit_output: Mapped[dict[str, Any] | list[Any]] = mapped_column(
+        "output",
+        JSON,
+        nullable=False,
+        server_default=text("(JSON_OBJECT())"),
+    )
     extra: Mapped[dict | list | None] = mapped_column("metadata", JSON, nullable=True)
     logged_at: Mapped[datetime] = mapped_column(
         "timestamp",
@@ -97,6 +114,37 @@ class File(Base):
         server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
     )
     updated_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("0")
+    )
+
+
+class QuizQuestion(Base):
+    __tablename__ = "quiz_questions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    file_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("files.id"), nullable=False)
+    question_text: Mapped[str] = mapped_column(String(2000), nullable=False)
+    correct_answer: Mapped[str] = mapped_column(String(1000), nullable=False)
+    decoy_1: Mapped[str] = mapped_column(String(1000), nullable=False)
+    decoy_2: Mapped[str] = mapped_column(String(1000), nullable=False)
+    decoy_3: Mapped[str] = mapped_column(String(1000), nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("1")
+    )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("0")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    created_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+    )
+    updated_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class QuizSettings(Base):
@@ -108,6 +156,9 @@ class QuizSettings(Base):
         BigInteger, nullable=False, server_default=text("60")
     )
     marks_per_question: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("10")
+    )
+    questions_per_attempt: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default=text("10")
     )
     created_at: Mapped[datetime] = mapped_column(

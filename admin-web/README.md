@@ -9,7 +9,7 @@ Run MySQL migration `backend/sql/004_admin_users.sql` if you use admin accounts.
 ## Sections
 
 - **Overview** — aggregate stats and status distribution (from `attempts`).
-- **Quiz settings** — view/update the `quiz_settings` row (max attempts, seconds per question, marks per question).
+- **Quiz settings** — view/update the `quiz_settings` row (max attempts, seconds per question, marks per question, questions per attempt).
 - **Aptitude analytics** — paginated table of quiz attempts (from the `attempts` table): score, status, and time taken.
 - **Subjects** — add subjects and soft-delete subjects; backend enforces only one active subject on creation.
 - **Administrators** — invite or disable admins.

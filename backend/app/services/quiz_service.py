@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from pathlib import Path
+import os
+import random
 from typing import Any
 
 from sqlalchemy import func, select, text
@@ -17,28 +18,16 @@ from app.models import (
     AttemptQuestionTiming,
     File,
     QuizAttempt,
+    QuizQuestion,
     QuizSettings,
     User,
-    UserFileMapping,
 )
-from app.services.quiz_gemini import QBANKS_DIR, load_and_build_quiz
 
 
 @guarded_service("quiz.sync_qbank_files")
 def sync_qbank_files() -> int:
-    """Insert `files` rows for each PDF in /qbanks (idempotent)."""
-    if engine() is None or not QBANKS_DIR.is_dir():
-        return 0
-    added = 0
-    with session_scope() as session:
-        for p in sorted(QBANKS_DIR.glob("*.pdf")):
-            existing = session.execute(
-                select(File).where(File.file_name == p.name)
-            ).scalar_one_or_none()
-            if existing is None:
-                session.add(File(file_name=p.name))
-                added += 1
-    return added
+    """Legacy no-op. Question-bank rows are now created via admin upload endpoint."""
+    return 0
 
 
 def _get_settings_row(session: Session) -> QuizSettings:
@@ -49,6 +38,7 @@ def _get_settings_row(session: Session) -> QuizSettings:
             max_attempts=3,
             time_per_question_seconds=60,
             marks_per_question=10,
+            questions_per_attempt=10,
         )
         session.add(row)
         session.flush()
@@ -62,6 +52,7 @@ def get_settings() -> dict[str, int]:
             "max_attempts": 3,
             "time_per_question_seconds": 60,
             "marks_per_question": 10,
+            "questions_per_attempt": 10,
         }
     with session_scope() as session:
         s = _get_settings_row(session)
@@ -69,7 +60,26 @@ def get_settings() -> dict[str, int]:
             "max_attempts": int(s.max_attempts),
             "time_per_question_seconds": int(s.time_per_question_seconds),
             "marks_per_question": int(s.marks_per_question),
+            "questions_per_attempt": int(getattr(s, "questions_per_attempt", 10) or 10),
         }
+
+
+@guarded_service("quiz.questions_per_attempt_for_question_bank")
+def questions_per_attempt_for_question_bank() -> int:
+    """Minimum MCQs required when uploading a question-bank PDF (quiz_settings.questions_per_attempt)."""
+    if engine() is None:
+        try:
+            v = int(os.environ.get("QUIZ_QUESTIONS_PER_ATTEMPT", "10").strip() or "10")
+        except Exception:
+            v = 10
+        return max(1, min(v, 100))
+    with session_scope() as session:
+        s = _get_settings_row(session)
+        try:
+            v = int(getattr(s, "questions_per_attempt", 10) or 10)
+        except Exception:
+            v = 10
+        return max(1, min(v, 100))
 
 
 @guarded_service("quiz.get_quiz_settings_admin")
@@ -81,6 +91,7 @@ def get_quiz_settings_admin() -> dict[str, Any]:
             "max_attempts": 3,
             "time_per_question_seconds": 60,
             "marks_per_question": 10,
+            "questions_per_attempt": 10,
             "created_at": None,
             "updated_at": None,
         }
@@ -93,6 +104,7 @@ def get_quiz_settings_admin() -> dict[str, Any]:
             "max_attempts": int(s.max_attempts),
             "time_per_question_seconds": int(s.time_per_question_seconds),
             "marks_per_question": int(s.marks_per_question),
+            "questions_per_attempt": int(getattr(s, "questions_per_attempt", 10) or 10),
             "created_at": ca.isoformat() if ca else None,
             "updated_at": ua.isoformat() if ua else None,
         }
@@ -139,6 +151,7 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
             "max_attempts": max_a,
             "time_per_question_seconds": int(s.time_per_question_seconds),
             "marks_per_question": int(s.marks_per_question),
+            "questions_per_attempt": int(getattr(s, "questions_per_attempt", 10) or 10),
             "attempts_used": used,
             "attempts_remaining": remaining,
             "total_correct_answers": total_correct,
@@ -155,10 +168,70 @@ def _next_attempt_number(session: Session, user_id: int) -> int:
     return int(m or 0) + 1
 
 
-def pick_random_unseen_file(session: Session, user_id: int) -> File | None:
-    sub = select(UserFileMapping.file_id).where(UserFileMapping.user_id == user_id)
-    stmt = select(File).where(~File.id.in_(sub)).order_by(text("RAND()")).limit(1)
+def pick_random_question_bank_file(session: Session) -> File | None:
+    """Any non-deleted `files` row that has at least one active `quiz_questions` row."""
+    has_active_questions = (
+        select(func.count())
+        .select_from(QuizQuestion)
+        .where(
+            QuizQuestion.file_id == File.id,
+            QuizQuestion.is_active.is_(True),
+            QuizQuestion.is_deleted.is_(False),
+        )
+        .scalar_subquery()
+    )
+    stmt = (
+        select(File)
+        .where(
+            File.is_deleted.is_(False),
+            has_active_questions > 0,
+        )
+        .order_by(text("RAND()"))
+        .limit(1)
+    )
     return session.execute(stmt).scalar_one_or_none()
+
+
+def _question_limit_per_attempt(session: Session) -> int:
+    s = _get_settings_row(session)
+    try:
+        v = int(getattr(s, "questions_per_attempt", 10) or 10)
+    except Exception:
+        v = 10
+    return max(1, min(v, 100))
+
+
+def _build_attempt_questions_from_db(session: Session, file_id: int) -> list[dict[str, Any]]:
+    rows = session.execute(
+        select(QuizQuestion).where(
+            QuizQuestion.file_id == file_id,
+            QuizQuestion.is_active.is_(True),
+            QuizQuestion.is_deleted.is_(False),
+        )
+    ).scalars().all()
+    if not rows:
+        return []
+    random.shuffle(rows)
+    rows = rows[: _question_limit_per_attempt(session)]
+    quiz: list[dict[str, Any]] = []
+    for r in rows:
+        options = [
+            str(r.correct_answer),
+            str(r.decoy_1),
+            str(r.decoy_2),
+            str(r.decoy_3),
+        ]
+        random.shuffle(options)
+        correct_index = options.index(str(r.correct_answer))
+        quiz.append(
+            {
+                "question_id": int(r.id),
+                "question": str(r.question_text),
+                "options": options,
+                "correct_index": correct_index,
+            }
+        )
+    return quiz
 
 
 @dataclass
@@ -170,6 +243,8 @@ class StartAttemptResult:
     first_question: dict[str, Any] | None = None
     time_seconds: int | None = None
     marks_per_question: int | None = None
+    source_file_id: int | None = None
+    source_file_name: str | None = None
     error: str | None = None
 
 
@@ -178,20 +253,19 @@ def start_attempt(user_id: int) -> StartAttemptResult:
     if engine() is None:
         return StartAttemptResult(ok=False, error="Database not configured")
 
-    sync_qbank_files()
-
-    pdf_path: Path | None = None
-    settings_snapshot: dict[str, int] = {}
-    picked_file_id: int | None = None
+    att_id: int | None = None
+    attempt_number: int | None = None
+    quiz: list[dict[str, Any]] = []
+    time_seconds: int | None = None
+    marks_per_question: int | None = None
+    source_file_id: int | None = None
+    source_file_name: str | None = None
 
     with session_scope() as session:
         settings = _get_settings_row(session)
-        settings_snapshot = {
-            "max_attempts": int(settings.max_attempts),
-            "time": int(settings.time_per_question_seconds),
-            "marks": int(settings.marks_per_question),
-        }
-        max_a = settings_snapshot["max_attempts"]
+        time_seconds = int(settings.time_per_question_seconds)
+        marks_per_question = int(settings.marks_per_question)
+        max_a = int(settings.max_attempts)
         used = session.execute(
             select(func.count()).select_from(QuizAttempt).where(QuizAttempt.user_id == user_id)
         ).scalar_one()
@@ -199,28 +273,23 @@ def start_attempt(user_id: int) -> StartAttemptResult:
         if used >= max_a:
             return StartAttemptResult(ok=False, error="No attempts remaining")
 
-        f = pick_random_unseen_file(session, user_id)
+        f = pick_random_question_bank_file(session)
         if f is None:
-            return StartAttemptResult(ok=False, error="No unused question banks available")
-
-        pdf_path = QBANKS_DIR / f.file_name
-        if not pdf_path.is_file():
-            return StartAttemptResult(ok=False, error=f"PDF missing on disk: {f.file_name}")
+            return StartAttemptResult(
+                ok=False,
+                error="No question banks with active questions are available",
+            )
         picked_file_id = int(f.id)
+        source_file_id = picked_file_id
+        source_file_name = str(f.file_name)
+        quiz = _build_attempt_questions_from_db(session, picked_file_id)
+        if not quiz:
+            return StartAttemptResult(
+                ok=False,
+                error=f"No active questions found for file: {f.file_name}",
+            )
 
-    assert pdf_path is not None
-
-    try:
-        quiz = load_and_build_quiz(pdf_path)
-    except Exception as e:
-        return StartAttemptResult(ok=False, error=str(e))
-
-    if not quiz:
-        return StartAttemptResult(ok=False, error="No questions generated from PDF")
-
-    with session_scope() as session:
         n = _next_attempt_number(session, user_id)
-        assert picked_file_id is not None
         att = QuizAttempt(
             user_id=user_id,
             file_id=picked_file_id,
@@ -234,20 +303,21 @@ def start_attempt(user_id: int) -> StartAttemptResult:
         )
         session.add(att)
         session.flush()
-        session.add(UserFileMapping(user_id=user_id, file_id=picked_file_id))
-        session.flush()
         att_id = int(att.id)
+        attempt_number = n
 
     first = quiz[0]
     q_payload = {"question": first["question"], "options": first["options"]}
     return StartAttemptResult(
         ok=True,
         attempt_id=att_id,
-        attempt_number=n,
+        attempt_number=attempt_number,
         total_questions=len(quiz),
         first_question={"index": 0, **q_payload},
-        time_seconds=settings_snapshot["time"],
-        marks_per_question=settings_snapshot["marks"],
+        time_seconds=time_seconds,
+        marks_per_question=marks_per_question,
+        source_file_id=source_file_id,
+        source_file_name=source_file_name,
     )
 
 
@@ -407,6 +477,7 @@ def update_quiz_settings_row(
     max_attempts: int | None = None,
     time_per_question_seconds: int | None = None,
     marks_per_question: int | None = None,
+    questions_per_attempt: int | None = None,
 ) -> dict[str, Any]:
     """Persist quiz_settings row id=1 (admin)."""
     if engine() is None:
@@ -417,6 +488,8 @@ def update_quiz_settings_row(
         raise ValueError("time_per_question_seconds must be >= 5")
     if marks_per_question is not None and marks_per_question < 1:
         raise ValueError("marks_per_question must be >= 1")
+    if questions_per_attempt is not None and questions_per_attempt < 1:
+        raise ValueError("questions_per_attempt must be >= 1")
 
     with session_scope() as session:
         row = _get_settings_row(session)
@@ -426,6 +499,8 @@ def update_quiz_settings_row(
             row.time_per_question_seconds = time_per_question_seconds
         if marks_per_question is not None:
             row.marks_per_question = marks_per_question
+        if questions_per_attempt is not None:
+            row.questions_per_attempt = questions_per_attempt
         session.flush()
 
     return get_quiz_settings_admin()
