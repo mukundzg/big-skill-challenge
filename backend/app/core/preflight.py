@@ -1,6 +1,7 @@
 """
-Pre-startup checks: run before the ASGI app is created so the server only starts
-when required dependencies are reachable.
+Pre-startup checks: run from FastAPI lifespan startup (see app.main) so importing
+`app.main` does not block on network/DB. The server only accepts traffic after
+checks pass (unless SKIP_PREFLIGHT_CHECKS is set).
 
 Add new checks by implementing a function that returns PreflightResult and
 appending it to PREFLIGHT_CHECKS.
@@ -9,9 +10,11 @@ appending it to PREFLIGHT_CHECKS.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from app.core.app_logger import log_error, log_info
 from app.db import is_database_configured, test_database_connection
 
 
@@ -87,8 +90,9 @@ def run_preflight() -> list[PreflightResult]:
 
 def assert_preflight_passes() -> None:
     """
-    Run preflight checks and raise RuntimeError if any fail.
-    If SKIP_PREFLIGHT_CHECKS is set, logs a warning and returns without checking.
+    Run preflight checks. If any fail: log errors (already emitted per check + summary), then
+    terminate the process with exit code 1.
+    If SKIP_PREFLIGHT_CHECKS is set, returns without checking.
     """
     if preflight_checks_disabled():
         print(
@@ -103,11 +107,23 @@ def assert_preflight_passes() -> None:
         if r.detail:
             line += f" — {r.detail}"
         print(line, flush=True)
+        if not r.ok:
+            log_error(
+                "Preflight check failed — fix configuration or set SKIP_* flags for local dev",
+                check=r.name,
+                detail=r.detail or "(no detail)",
+            )
 
     failed = [r for r in results if not r.ok]
     if not failed:
         print("[preflight] All checks passed.\n", flush=True)
+        log_info("Preflight: all checks passed")
         return
 
     parts = [f"{r.name}: {r.detail}" for r in failed]
-    raise RuntimeError("Startup preflight failed: " + "; ".join(parts))
+    summary = "; ".join(parts)
+    log_error(
+        "Startup aborted: preflight failed (see prior log lines per check)",
+        summary=summary,
+    )
+    sys.exit(1)

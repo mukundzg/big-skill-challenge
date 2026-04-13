@@ -28,7 +28,9 @@ export function AnalyticsPanel({ token }: { token: string }) {
   }, [token, offset, agentFilter]);
 
   useEffect(() => {
-    void load();
+    queueMicrotask(() => {
+      void load();
+    });
   }, [load]);
 
   const onFilterChange = (v: string) => {

@@ -34,4 +34,108 @@ export async function api<T>(
   return JSON.parse(text) as T;
 }
 
+export type QuestionBankUploadItem = {
+  original_file_name: string;
+  success: boolean;
+  file_id?: number | null;
+  file_name?: string | null;
+  inserted_questions: number;
+  deduped_questions: number;
+  /** True if Ollama generated decoys for at least one question in this PDF */
+  used_ollama?: boolean;
+  error?: string | null;
+};
+
+export type QuestionBankUploadBatchResponse = {
+  ok: true;
+  items: QuestionBankUploadItem[];
+  succeeded: number;
+  failed: number;
+};
+
+export type QuestionBankUploadProgress = {
+  /** 0–100 overall bar */
+  percent: number;
+  phase: 'upload' | 'processing';
+};
+
+function parseXhrError(xhr: XMLHttpRequest, body: string): string {
+  return parseError(
+    new Response(body, { status: xhr.status, statusText: xhr.statusText }),
+    body,
+  );
+}
+
+/**
+ * POST multipart to question-bank upload with upload-byte progress (XHR) and a smooth
+ * “processing” segment until the server responds (parse / dedupe / DB — no server push).
+ */
+export function uploadQuestionBanksWithProgress(
+  formData: FormData,
+  token: string,
+  onProgress: (p: QuestionBankUploadProgress) => void,
+): Promise<QuestionBankUploadBatchResponse> {
+  const url = `${API_BASE}/admin/question-banks/upload`;
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let simTimer: ReturnType<typeof setInterval> | null = null;
+    let processingStarted = false;
+
+    const clearSim = () => {
+      if (simTimer) {
+        clearInterval(simTimer);
+        simTimer = null;
+      }
+    };
+
+    const startProcessingPhase = () => {
+      if (processingStarted) return;
+      processingStarted = true;
+      onProgress({ percent: 25, phase: 'processing' });
+      let sim = 25;
+      simTimer = setInterval(() => {
+        sim = Math.min(sim + 0.85, 92);
+        onProgress({ percent: sim, phase: 'processing' });
+      }, 380);
+    };
+
+    xhr.open('POST', url);
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && ev.total > 0) {
+        const pct = Math.min(22, Math.round((ev.loaded / ev.total) * 22));
+        onProgress({ percent: pct, phase: 'upload' });
+      }
+    };
+
+    xhr.upload.onload = () => {
+      startProcessingPhase();
+    };
+
+    xhr.onload = () => {
+      clearSim();
+      const text = xhr.responseText || '';
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress({ percent: 100, phase: 'processing' });
+        try {
+          resolve(JSON.parse(text) as QuestionBankUploadBatchResponse);
+        } catch {
+          reject(new Error('Invalid server response'));
+        }
+      } else {
+        reject(new Error(parseXhrError(xhr, text)));
+      }
+    };
+
+    xhr.onerror = () => {
+      clearSim();
+      reject(new Error('Network error'));
+    };
+
+    onProgress({ percent: 2, phase: 'upload' });
+    xhr.send(formData);
+  });
+}
+
 export const apiBase = API_BASE;

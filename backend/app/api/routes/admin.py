@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+# Multipart parts from `request.form()` are Starlette UploadFile; FastAPI's UploadFile is a different class.
+from starlette.datastructures import UploadFile
 
 from app.schemas.admin import (
     AdminEmailsBody,
@@ -24,6 +27,10 @@ from app.schemas.admin import (
     OkResponse,
     QuizSettingsResponse,
     QuizSettingsUpdateBody,
+    QuestionBanksResponse,
+    QuestionBankRow,
+    QuestionBankUploadBatchResponse,
+    QuestionBankUploadItemResult,
     RegisterAdminsResponse,
     ScoreDetailResponse,
     ScoreReviewHistoryResponse,
@@ -36,6 +43,7 @@ from app.schemas.admin import (
     TokenResponse,
     UserScoresResponse,
 )
+from app.core.app_logger import log_info
 from app.services import admin_service
 from app.services.content_analysis_service import (
     analytics_overview_scores,
@@ -48,6 +56,7 @@ from app.services.content_analysis_service import (
     update_score_human_review,
 )
 from app.services.quiz_service import get_quiz_settings_admin, update_quiz_settings_row
+from app.services.question_bank_service import list_question_banks, upload_question_bank
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 _bearer = HTTPBearer(auto_error=False)
@@ -204,6 +213,166 @@ def list_content_subjects(
         raise HTTPException(status_code=401, detail=str(e)) from e
     rows = admin_service.list_content_subjects(include_deleted=include_deleted)
     return ContentSubjectsResponse(subjects=[ContentSubjectRow(**r.__dict__) for r in rows])
+
+
+@router.get("/question-banks", response_model=QuestionBanksResponse)
+def list_question_banks_admin(token: Annotated[str, Depends(_auth_header)]):
+    try:
+        admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    rows = list_question_banks()
+    return QuestionBanksResponse(rows=[QuestionBankRow(**r) for r in rows])
+
+
+def _question_bank_upload_max_batch() -> int:
+    raw = os.environ.get("QUESTION_BANK_UPLOAD_MAX_BATCH", "50").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 50
+    return max(1, min(n, 200))
+
+
+@router.post("/question-banks/upload", response_model=QuestionBankUploadBatchResponse)
+async def upload_question_bank_admin(
+    request: Request,
+    token: Annotated[str, Depends(_auth_header)],
+):
+    """Upload one or many PDFs. Use form field `files` (repeatable) or legacy `upload` (single).
+
+    PDFs are processed **sequentially** (queued) so memory and DB work stay bounded.
+    """
+    try:
+        actor = admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+
+    form = await request.form()
+    queue: list[UploadFile] = []
+    for part in form.getlist("files"):
+        if isinstance(part, UploadFile):
+            queue.append(part)
+    if not queue:
+        single = form.get("upload")
+        if isinstance(single, UploadFile):
+            queue.append(single)
+    if not queue:
+        raise HTTPException(
+            status_code=400,
+            detail="Send one or more PDFs using form field files (repeatable) or upload (single)",
+        )
+    max_batch = _question_bank_upload_max_batch()
+    if len(queue) > max_batch:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {max_batch} PDFs per request",
+        )
+
+    items: list[QuestionBankUploadItemResult] = []
+    succeeded = 0
+    failed = 0
+    total = len(queue)
+    log_info(
+        "Admin API: question bank upload queue starting",
+        queue_total=total,
+        actor_user_id=actor,
+    )
+    for position, uf in enumerate(queue, start=1):
+        name = (uf.filename or "").strip() or "unknown.pdf"
+        if not name.lower().endswith(".pdf"):
+            items.append(
+                QuestionBankUploadItemResult(
+                    original_file_name=name,
+                    success=False,
+                    error="Only PDF uploads are supported",
+                )
+            )
+            failed += 1
+            log_info(
+                "Admin API: question bank queue skip non-PDF",
+                position=position,
+                queue_total=total,
+                file_name=name,
+            )
+            continue
+        try:
+            log_info(
+                "Admin API: question bank queue item started",
+                position=position,
+                queue_total=total,
+                file_name=name,
+                actor_user_id=actor,
+            )
+            raw = await uf.read()
+            log_info(
+                "Admin API: question bank upload request body read",
+                file_name=name,
+                bytes=len(raw),
+                actor_user_id=actor,
+            )
+            out = upload_question_bank(file_name=name, content=raw, actor_user_id=actor)
+            log_info(
+                "Admin API: question bank upload completed",
+                file_id=out.file_id,
+                file_name=out.file_name,
+                inserted_questions=out.inserted_questions,
+                deduped_questions=out.deduped_questions,
+                used_ollama=out.used_ollama,
+            )
+            items.append(
+                QuestionBankUploadItemResult(
+                    original_file_name=name,
+                    success=True,
+                    file_id=out.file_id,
+                    file_name=out.file_name,
+                    inserted_questions=out.inserted_questions,
+                    deduped_questions=out.deduped_questions,
+                    used_ollama=out.used_ollama,
+                )
+            )
+            succeeded += 1
+        except ValueError as e:
+            failed += 1
+            items.append(
+                QuestionBankUploadItemResult(
+                    original_file_name=name,
+                    success=False,
+                    error=str(e),
+                )
+            )
+            log_info(
+                "Admin API: question bank queue item failed",
+                position=position,
+                queue_total=total,
+                file_name=name,
+                error=str(e),
+            )
+        except RuntimeError as e:
+            failed += 1
+            items.append(
+                QuestionBankUploadItemResult(
+                    original_file_name=name,
+                    success=False,
+                    error=str(e),
+                )
+            )
+            log_info(
+                "Admin API: question bank queue item failed",
+                position=position,
+                queue_total=total,
+                file_name=name,
+                error=str(e),
+            )
+
+    log_info(
+        "Admin API: question bank upload queue finished",
+        queue_total=total,
+        succeeded=succeeded,
+        failed=failed,
+        actor_user_id=actor,
+    )
+    return QuestionBankUploadBatchResponse(items=items, succeeded=succeeded, failed=failed)
 
 
 @router.post("/content-subjects", response_model=ContentSubjectRow)

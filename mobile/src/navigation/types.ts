@@ -6,7 +6,7 @@ export type RootStackParamList = {
   Home: undefined;
   /** Quiz dashboard after consents (default landing when consents already accepted) */
   QuizHome: undefined;
-  /** PDF + Gemini loading before QuizPlay */
+  /** Server starts attempt and returns first question (DB-backed bank) */
   QuizPrepare: { email: string };
   QuizPlay: {
     attemptId: number;

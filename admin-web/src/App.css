@@ -304,6 +304,7 @@
   background: #0f172a;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .dash-header {
@@ -568,6 +569,217 @@
   border: 1px solid #334155;
   border-radius: 10px;
   padding: 0.75rem;
+}
+
+.ok {
+  color: #bbf7d0;
+  background: #052e16;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+
+.qb-upload-summary {
+  position: relative;
+  padding-right: 2.25rem;
+  transition: opacity 0.45s ease, transform 0.45s ease;
+}
+
+.qb-upload-summary-fade {
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+
+.qb-upload-summary-close {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.45rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.35);
+  color: #bbf7d0;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qb-upload-summary-close:hover {
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff;
+}
+
+.qb-upload-summary-text {
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: inherit;
+}
+
+.qb-panel-wrap {
+  position: relative;
+}
+
+.qb-upload-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgba(15, 23, 42, 0.82);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  border-radius: 12px;
+}
+
+.qb-upload-overlay-card {
+  width: min(420px, 100%);
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.qb-upload-overlay-title {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: #f8fafc;
+  margin-bottom: 0.35rem;
+}
+
+.qb-upload-overlay-phase {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.qb-upload-overlay-pct {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  font-variant: tabular-nums;
+}
+
+.qb-upload-overlay-hint {
+  margin: 0.75rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.qb-progress-track {
+  height: 8px;
+  border-radius: 4px;
+  background: #334155;
+  overflow: hidden;
+}
+
+.qb-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #7c3aed);
+  border-radius: 4px;
+  transition: width 0.2s ease-out;
+}
+
+.qb-upload-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.qb-upload-actions .btn {
+  margin-top: 0;
+}
+
+.btn.outline.sm {
+  margin-top: 0;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.85rem;
+}
+
+.qb-global-banner {
+  flex-shrink: 0;
+  border-top: 1px solid #334155;
+  background: linear-gradient(180deg, #0f172a, #020617);
+  padding: 0.75rem clamp(1rem, 3vw, 2rem) 1rem;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.qb-global-banner-inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.qb-global-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.qb-global-banner-text strong {
+  color: #f1f5f9;
+  font-size: 0.95rem;
+}
+
+.qb-global-banner-files {
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
+.qb-global-banner-phase {
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.qb-global-banner-err {
+  font-size: 0.85rem;
+  color: #fecaca;
+}
+
+.qb-global-banner-summary {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow: auto;
+  background: #020617;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  border: 1px solid #1e293b;
+}
+
+.qb-global-banner-side {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.qb-global-banner-pct {
+  font-weight: 700;
+  font-variant: tabular-nums;
+  color: #e2e8f0;
+  min-width: 2.5rem;
+  text-align: right;
+}
+
+.qb-global-banner-track {
+  margin-top: 0.65rem;
 }
 
 @media (max-width: 768px) {
