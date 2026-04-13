@@ -561,6 +561,31 @@
   padding: 1rem;
 }
 
+.qb-gemini-modal-card {
+  width: min(960px, 100%);
+  max-height: 92vh;
+}
+
+.qb-gemini-pdf-frame {
+  display: block;
+  width: 100%;
+  height: min(72vh, 720px);
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: #020617;
+}
+
+.qb-gemini-reason {
+  font-size: 0.9rem;
+  color: #fcd34d;
+  background: #422006;
+  border: 1px solid #854d0e;
+  border-radius: 8px;
+  padding: 0.65rem 0.85rem;
+  margin: 0.75rem 0;
+  white-space: pre-wrap;
+}
+
 .submission-body {
   white-space: pre-wrap;
   line-height: 1.5;

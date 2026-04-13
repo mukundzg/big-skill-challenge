@@ -162,6 +162,35 @@ def _api_key() -> str:
     return os.environ.get("GEM_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
 
 
+def gemini_api_key_configured() -> bool:
+    return bool(_api_key())
+
+
+def _question_bank_gemini_timeout_ms() -> int:
+    raw = os.environ.get("QUESTION_BANK_GEMINI_TIMEOUT_MS", "120000").strip() or "120000"
+    try:
+        return max(15_000, int(raw))
+    except ValueError:
+        return 120_000
+
+
+def _question_bank_gemini_max_pdf_bytes() -> int:
+    raw = os.environ.get("QUESTION_BANK_GEMINI_MAX_PDF_BYTES", str(15 * 1024 * 1024)).strip()
+    try:
+        return max(256_000, int(raw))
+    except ValueError:
+        return 15 * 1024 * 1024
+
+
+_QUESTION_BANK_EXTRACT_PROMPT = """You extract multiple-choice quizzes from educational documents.
+Return ONLY a JSON array (no markdown, no prose). Each object must have:
+- "question": string — the full question stem only (no leading "1." numbering if you can strip it cleanly).
+- "options": array of exactly 4 strings — the answer choices in order (A through D).
+- "correct_answer": string — must exactly match one of the four option strings (same value).
+
+Use the source material only. If the document gives an answer key (e.g. "Answer: 5" or "Answer: B"), map it to the correct option text. If fewer than four choices appear, add one plausible distractor consistent with the topic. Include every distinct MCQ you find."""
+
+
 def gemini_model_name() -> str:
     return os.environ.get("QUIZ_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 
@@ -293,6 +322,93 @@ Text to process:
             pdf_path=pdf_path or "unknown",
             model=gemini_model_name(),
             raw_text_chars=len(raw_text),
+        )
+        raise
+
+
+def extract_question_bank_mcqs_via_gemini(
+    *,
+    text: str | None = None,
+    pdf_bytes: bytes | None = None,
+    file_name: str = "unknown",
+) -> list[dict[str, Any]]:
+    """
+    Structured MCQ extraction for admin question-bank upload when regex parsing fails.
+    Pass either extracted text or raw PDF bytes (multimodal); not both required, but at least one non-empty.
+    """
+    key = _api_key()
+    if not key:
+        raise RuntimeError("GEM_KEY (or GOOGLE_API_KEY) is not set")
+    if not (text or "").strip() and not pdf_bytes:
+        raise ValueError("Gemini extraction requires non-empty text or pdf_bytes")
+    if pdf_bytes is not None and len(pdf_bytes) == 0:
+        raise ValueError("pdf_bytes is empty")
+
+    model = gemini_model_name()
+    timeout_ms = _question_bank_gemini_timeout_ms()
+    client = genai.Client(
+        api_key=key,
+        http_options=types.HttpOptions(timeout=timeout_ms),
+    )
+    cfg = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        max_output_tokens=16384,
+    )
+
+    try:
+        if pdf_bytes is not None:
+            max_b = _question_bank_gemini_max_pdf_bytes()
+            if len(pdf_bytes) > max_b:
+                raise ValueError(
+                    f"PDF size {len(pdf_bytes)} exceeds QUESTION_BANK_GEMINI_MAX_PDF_BYTES ({max_b})"
+                )
+            prompt = (
+                _QUESTION_BANK_EXTRACT_PROMPT
+                + "\n\nThe multiple-choice quiz is in the attached PDF. Extract every question."
+            )
+            response = client.models.generate_content(
+                model=model,
+                contents=[
+                    types.Part.from_text(text=prompt),
+                    types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
+                ],
+                config=cfg,
+            )
+        else:
+            snippet = _normalize_extracted_pdf_text(text or "")[:MAX_TEXT_CHARS]
+            if not snippet.strip():
+                return []
+            body = f"{_QUESTION_BANK_EXTRACT_PROMPT}\n\nDocument text:\n{snippet}"
+            response = client.models.generate_content(
+                model=model,
+                contents=body,
+                config=cfg,
+            )
+
+        out_text = (response.text or "").strip()
+        if not out_text:
+            log_warn(
+                "Gemini question-bank extraction returned empty body",
+                file_name=file_name,
+                model=model,
+            )
+            return []
+        rows = parse_json_quiz_from_model_text(out_text)
+        log_info(
+            "Gemini question-bank extraction parsed JSON",
+            file_name=file_name,
+            model=model,
+            question_count=len(rows),
+            used_pdf=bool(pdf_bytes),
+        )
+        return rows
+    except Exception as e:
+        log_error(
+            "Gemini question-bank extraction failed",
+            exc=e,
+            file_name=file_name,
+            model=model,
+            used_pdf=bool(pdf_bytes),
         )
         raise
 

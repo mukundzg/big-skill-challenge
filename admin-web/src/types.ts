@@ -11,6 +11,8 @@ export type QuizSettings = {
   max_attempts: number;
   time_per_question_seconds: number;
   marks_per_question: number;
+  /** Minimum MCQs required per question-bank PDF; also caps questions served per quiz attempt */
+  questions_per_attempt: number;
   created_at: string | null;
   updated_at: string | null;
 };

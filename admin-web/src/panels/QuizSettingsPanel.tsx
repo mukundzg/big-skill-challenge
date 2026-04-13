@@ -7,6 +7,7 @@ export function QuizSettingsPanel({ token }: { token: string }) {
   const [maxAttempts, setMaxAttempts] = useState(3);
   const [timeSec, setTimeSec] = useState(60);
   const [marks, setMarks] = useState(10);
+  const [questionsPerAttempt, setQuestionsPerAttempt] = useState(10);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -22,6 +23,7 @@ export function QuizSettingsPanel({ token }: { token: string }) {
           setMaxAttempts(s.max_attempts);
           setTimeSec(s.time_per_question_seconds);
           setMarks(s.marks_per_question);
+          setQuestionsPerAttempt(s.questions_per_attempt ?? 10);
         }
       } catch (e) {
         if (!c) setErr(e instanceof Error ? e.message : String(e));
@@ -45,6 +47,7 @@ export function QuizSettingsPanel({ token }: { token: string }) {
           max_attempts: maxAttempts,
           time_per_question_seconds: timeSec,
           marks_per_question: marks,
+          questions_per_attempt: questionsPerAttempt,
         }),
       });
       setData(s);
@@ -100,6 +103,22 @@ export function QuizSettingsPanel({ token }: { token: string }) {
               value={marks}
               onChange={(e) => setMarks(Number(e.target.value))}
             />
+          </div>
+          <div>
+            <label className="label">Questions per attempt</label>
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={100}
+              value={questionsPerAttempt}
+              onChange={(e) => setQuestionsPerAttempt(Number(e.target.value))}
+            />
+            <p className="muted small" style={{ marginTop: '0.35rem' }}>
+              Each uploaded question-bank PDF must yield at least this many distinct MCQs (after
+              deduplication). If the PDF has more, only this many are stored. Quizzes sample up to this
+              many questions per attempt.
+            </p>
           </div>
         </div>
         <button type="button" className="btn primary" onClick={onSave}>

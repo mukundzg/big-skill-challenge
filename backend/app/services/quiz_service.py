@@ -38,6 +38,7 @@ def _get_settings_row(session: Session) -> QuizSettings:
             max_attempts=3,
             time_per_question_seconds=60,
             marks_per_question=10,
+            questions_per_attempt=10,
         )
         session.add(row)
         session.flush()
@@ -51,6 +52,7 @@ def get_settings() -> dict[str, int]:
             "max_attempts": 3,
             "time_per_question_seconds": 60,
             "marks_per_question": 10,
+            "questions_per_attempt": 10,
         }
     with session_scope() as session:
         s = _get_settings_row(session)
@@ -58,7 +60,26 @@ def get_settings() -> dict[str, int]:
             "max_attempts": int(s.max_attempts),
             "time_per_question_seconds": int(s.time_per_question_seconds),
             "marks_per_question": int(s.marks_per_question),
+            "questions_per_attempt": int(getattr(s, "questions_per_attempt", 10) or 10),
         }
+
+
+@guarded_service("quiz.questions_per_attempt_for_question_bank")
+def questions_per_attempt_for_question_bank() -> int:
+    """Minimum MCQs required when uploading a question-bank PDF (quiz_settings.questions_per_attempt)."""
+    if engine() is None:
+        try:
+            v = int(os.environ.get("QUIZ_QUESTIONS_PER_ATTEMPT", "10").strip() or "10")
+        except Exception:
+            v = 10
+        return max(1, min(v, 100))
+    with session_scope() as session:
+        s = _get_settings_row(session)
+        try:
+            v = int(getattr(s, "questions_per_attempt", 10) or 10)
+        except Exception:
+            v = 10
+        return max(1, min(v, 100))
 
 
 @guarded_service("quiz.get_quiz_settings_admin")
@@ -70,6 +91,7 @@ def get_quiz_settings_admin() -> dict[str, Any]:
             "max_attempts": 3,
             "time_per_question_seconds": 60,
             "marks_per_question": 10,
+            "questions_per_attempt": 10,
             "created_at": None,
             "updated_at": None,
         }
@@ -82,6 +104,7 @@ def get_quiz_settings_admin() -> dict[str, Any]:
             "max_attempts": int(s.max_attempts),
             "time_per_question_seconds": int(s.time_per_question_seconds),
             "marks_per_question": int(s.marks_per_question),
+            "questions_per_attempt": int(getattr(s, "questions_per_attempt", 10) or 10),
             "created_at": ca.isoformat() if ca else None,
             "updated_at": ua.isoformat() if ua else None,
         }
@@ -128,6 +151,7 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
             "max_attempts": max_a,
             "time_per_question_seconds": int(s.time_per_question_seconds),
             "marks_per_question": int(s.marks_per_question),
+            "questions_per_attempt": int(getattr(s, "questions_per_attempt", 10) or 10),
             "attempts_used": used,
             "attempts_remaining": remaining,
             "total_correct_answers": total_correct,
@@ -168,9 +192,10 @@ def pick_random_question_bank_file(session: Session) -> File | None:
     return session.execute(stmt).scalar_one_or_none()
 
 
-def _question_limit_per_attempt() -> int:
+def _question_limit_per_attempt(session: Session) -> int:
+    s = _get_settings_row(session)
     try:
-        v = int(os.environ.get("QUIZ_QUESTIONS_PER_ATTEMPT", "10").strip() or "10")
+        v = int(getattr(s, "questions_per_attempt", 10) or 10)
     except Exception:
         v = 10
     return max(1, min(v, 100))
@@ -187,7 +212,7 @@ def _build_attempt_questions_from_db(session: Session, file_id: int) -> list[dic
     if not rows:
         return []
     random.shuffle(rows)
-    rows = rows[: _question_limit_per_attempt()]
+    rows = rows[: _question_limit_per_attempt(session)]
     quiz: list[dict[str, Any]] = []
     for r in rows:
         options = [
@@ -452,6 +477,7 @@ def update_quiz_settings_row(
     max_attempts: int | None = None,
     time_per_question_seconds: int | None = None,
     marks_per_question: int | None = None,
+    questions_per_attempt: int | None = None,
 ) -> dict[str, Any]:
     """Persist quiz_settings row id=1 (admin)."""
     if engine() is None:
@@ -462,6 +488,8 @@ def update_quiz_settings_row(
         raise ValueError("time_per_question_seconds must be >= 5")
     if marks_per_question is not None and marks_per_question < 1:
         raise ValueError("marks_per_question must be >= 1")
+    if questions_per_attempt is not None and questions_per_attempt < 1:
+        raise ValueError("questions_per_attempt must be >= 1")
 
     with session_scope() as session:
         row = _get_settings_row(session)
@@ -471,6 +499,8 @@ def update_quiz_settings_row(
             row.time_per_question_seconds = time_per_question_seconds
         if marks_per_question is not None:
             row.marks_per_question = marks_per_question
+        if questions_per_attempt is not None:
+            row.questions_per_attempt = questions_per_attempt
         session.flush()
 
     return get_quiz_settings_admin()
