@@ -1,5 +1,6 @@
 """Admin API request/response models."""
 
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
@@ -155,6 +156,17 @@ class ScoreHighlightsResponse(BaseModel):
     rows: list[ScoreRow]
 
 
+class ShortlistScoresResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    threshold_percent: int
+    repeat_users: bool
+    total_scores_in_pool: int
+    shortlist_size: int
+    rows: list[ScoreRow]
+
+
 class ReviewScoresBody(BaseModel):
     relevance: int = Field(..., ge=0, le=10)
     creativity: int = Field(..., ge=0, le=10)
@@ -193,24 +205,42 @@ class ScoreReviewUpdateResponse(BaseModel):
     score: ScoreDetailResponse
 
 
-class ContentSubjectCreateBody(BaseModel):
+class ContestSettingCreateBody(BaseModel):
     subject_name: str = Field(..., min_length=2, max_length=255)
     subject_description: str | None = Field(default=None, max_length=1000)
     is_active: bool = False
+    season_start_date: date | None = None
+    season_end_date: date | None = None
+    shortlist_threshold: int = Field(default=10, ge=1, le=100)
+    allow_repeat_users: bool = False
 
 
-class ContentSubjectRow(BaseModel):
+class ContestSettingSeasonBody(BaseModel):
+    season_start_date: date | None = None
+    season_end_date: date | None = None
+
+
+class ContestSettingShortlistBody(BaseModel):
+    shortlist_threshold: int = Field(..., ge=1, le=100)
+    allow_repeat_users: bool = False
+
+
+class ContestSettingRow(BaseModel):
     id: int
     subject_name: str
     subject_description: str | None = None
     is_active: bool
     is_deleted: bool
+    season_start: str | None = None
+    season_end: str | None = None
+    shortlist_threshold: int
+    allow_repeat_users: bool
     created_at: str | None = None
     updated_at: str | None = None
 
 
-class ContentSubjectsResponse(BaseModel):
-    subjects: list[ContentSubjectRow]
+class ContestSettingsResponse(BaseModel):
+    settings: list[ContestSettingRow]
 
 
 class QuestionBankRow(BaseModel):

@@ -830,3 +830,74 @@
     width: 100%;
   }
 }
+
+.row-dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .row-dates {
+    grid-template-columns: 1fr;
+  }
+}
+
+.inline-season-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.inline-shortlist-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 12rem;
+}
+
+.input.sm {
+  max-width: none;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.date-text-field {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.date-text-field .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.date-text-field-picker {
+  flex-shrink: 0;
+  width: min(9.5rem, 100%);
+  min-height: 2.35rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #475569;
+  background: #0f172a;
+  color: #e2e8f0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.date-text-field-picker:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+}
+
+.date-text-field.sm .date-text-field-picker {
+  min-height: 2rem;
+  width: min(8.75rem, 100%);
+  padding: 0.3rem 0.4rem;
+  font-size: 0.85rem;
+}

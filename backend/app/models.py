@@ -224,14 +224,22 @@ class AttemptQuestionTiming(Base):
     shown_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
 
 
-class ContentSubject(Base):
-    __tablename__ = "content_subjects"
+class ContestSetting(Base):
+    __tablename__ = "contest_settings"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     subject_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     subject_description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
+    season_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    season_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    shortlist_threshold: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("10")
+    )
+    allow_repeat_users: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )

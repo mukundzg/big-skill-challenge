@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 from sqlalchemy import select
 
 from app.db import session_scope
-from app.models import ContentSubject
+from app.models import ContestSetting
 from app.services.content_resolver.audit import AuditLogger
 from app.services.content_resolver.llm_reviewer import llm_review_enabled, review_with_openai
 from app.services.content_resolver.logging_utils import app_log
@@ -40,13 +40,15 @@ def build_service(
 def _get_active_subject() -> tuple[int, str, str | None]:
     with session_scope() as session:
         row = session.execute(
-            select(ContentSubject).where(
-                ContentSubject.is_active.is_(True),
-                ContentSubject.is_deleted.is_(False),
+            select(ContestSetting).where(
+                ContestSetting.is_active.is_(True),
+                ContestSetting.is_deleted.is_(False),
             )
         ).scalar_one_or_none()
         if row is None:
-            raise RuntimeError("No active content subject configured. Ask admin to add one active subject.")
+            raise RuntimeError(
+                "No active contest setting configured. Ask admin to add one active contest setting (subject)."
+            )
         return int(row.id), row.subject_name, row.subject_description
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from sqlalchemy import text
@@ -103,6 +104,141 @@ def list_scores(
 
     out: list[dict[str, Any]] = [_row_to_score_dict(r) for r in rows]
     return out, total
+
+
+@guarded_service("content_analysis.list_shortlisted_scores")
+def list_shortlisted_scores(
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int, dict[str, Any]] | None:
+    """
+    Rows in the top ``shortlist_threshold`` percent of all `scores` by weighted_score (then tie-breakers),
+    using the **active** `contest_settings` row. ``shortlist_size`` = ceil(n * p / 100) capped at ``n``.
+    Returns None if there is no active contest setting.
+    """
+    if engine() is None:
+        return None
+
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+
+    threshold_q = text(
+        """
+        SELECT shortlist_threshold, allow_repeat_users
+        FROM contest_settings
+        WHERE is_active = 1 AND is_deleted = 0
+        LIMIT 1
+        """
+    )
+    count_q = text("SELECT COUNT(*) AS n FROM scores")
+    distinct_users_q = text("SELECT COUNT(DISTINCT user_id) AS n FROM scores")
+
+    def _threshold_and_n(session):
+        tr = session.execute(threshold_q).mappings().one_or_none()
+        if tr is None:
+            return None
+        pct = int(tr["shortlist_threshold"])
+        pct = max(1, min(pct, 100))
+        repeat_users = bool(tr["allow_repeat_users"])
+        n_raw = session.execute(count_q).scalar()
+        n = int(n_raw or 0)
+        du_raw = session.execute(distinct_users_q).scalar()
+        distinct_users = int(du_raw or 0)
+        return pct, repeat_users, n, distinct_users
+
+    base = run_in_transaction(_threshold_and_n, operation="content_analysis.list_shortlisted_scores.meta")
+    if base is None:
+        return None
+
+    pct, repeat_users, n, distinct_users = base
+    if n == 0:
+        return (
+            [],
+            0,
+            {
+                "threshold_percent": pct,
+                "repeat_users": repeat_users,
+                "total_scores_in_pool": 0,
+                "shortlist_size": 0,
+            },
+        )
+
+    k = min(n, max(0, math.ceil(n * pct / 100.0)))
+
+    rows_q_repeat = text(
+        """
+        WITH ranked AS (
+          SELECT
+            s.id, s.agent, s.relevance, s.creativity, s.clarity, s.impact, s.total_score, s.weighted_score,
+            s.confidence, s.uncertainty_reason, s.needs_human_review,
+            s.reasoning, s.evaluated_at, s.submission_id, s.user_id, u.email AS user_email,
+            ROW_NUMBER() OVER (
+              ORDER BY s.weighted_score DESC, s.total_score DESC, s.evaluated_at DESC, s.id DESC
+            ) AS rn
+          FROM scores s
+          LEFT JOIN users u ON u.id = s.user_id
+        )
+        SELECT
+          id, agent, relevance, creativity, clarity, impact, total_score, weighted_score,
+          confidence, uncertainty_reason, needs_human_review,
+          reasoning, evaluated_at, submission_id, user_id, user_email
+        FROM ranked
+        WHERE rn <= :k
+        ORDER BY weighted_score DESC, total_score DESC, evaluated_at DESC, id DESC
+        LIMIT :limit OFFSET :offset
+        """
+    )
+    rows_q_unique = text(
+        """
+        WITH per_user AS (
+          SELECT
+            s.id, s.agent, s.relevance, s.creativity, s.clarity, s.impact, s.total_score, s.weighted_score,
+            s.confidence, s.uncertainty_reason, s.needs_human_review,
+            s.reasoning, s.evaluated_at, s.submission_id, s.user_id, u.email AS user_email,
+            ROW_NUMBER() OVER (
+              PARTITION BY s.user_id
+              ORDER BY s.weighted_score DESC, s.total_score DESC, s.evaluated_at DESC, s.id DESC
+            ) AS user_rn
+          FROM scores s
+          LEFT JOIN users u ON u.id = s.user_id
+        ),
+        ranked AS (
+          SELECT
+            *,
+            ROW_NUMBER() OVER (
+              ORDER BY weighted_score DESC, total_score DESC, evaluated_at DESC, id DESC
+            ) AS rn
+          FROM per_user
+          WHERE user_rn = 1
+        )
+        SELECT
+          id, agent, relevance, creativity, clarity, impact, total_score, weighted_score,
+          confidence, uncertainty_reason, needs_human_review,
+          reasoning, evaluated_at, submission_id, user_id, user_email
+        FROM ranked
+        WHERE rn <= :k
+        ORDER BY weighted_score DESC, total_score DESC, evaluated_at DESC, id DESC
+        LIMIT :limit OFFSET :offset
+        """
+    )
+
+    def _rows(session):
+        return session.execute(
+            rows_q_repeat if repeat_users else rows_q_unique,
+            {"k": k, "limit": limit, "offset": offset},
+        ).mappings().all()
+
+    rows = run_in_transaction(_rows, operation="content_analysis.list_shortlisted_scores.rows")
+    shortlist_count = k if repeat_users else min(k, distinct_users)
+    out = [_row_to_score_dict(r) for r in rows]
+    meta = {
+        "threshold_percent": pct,
+        "repeat_users": repeat_users,
+        "total_scores_in_pool": n,
+        "shortlist_size": shortlist_count,
+    }
+    return out, shortlist_count, meta
 
 
 @guarded_service("content_analysis.scores_summary")
