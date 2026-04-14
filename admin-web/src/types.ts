@@ -139,12 +139,27 @@ export type ScoreHighlightsResponse = {
   rows: ScoreRow[];
 };
 
-export type ContentSubjectRow = {
+export type ShortlistScoresResponse = {
+  total: number;
+  limit: number;
+  offset: number;
+  threshold_percent: number;
+  repeat_users: boolean;
+  total_scores_in_pool: number;
+  shortlist_size: number;
+  rows: ScoreRow[];
+};
+
+export type ContestSettingRow = {
   id: number;
   subject_name: string;
   subject_description: string | null;
   is_active: boolean;
   is_deleted: boolean;
+  season_start: string | null;
+  season_end: string | null;
+  shortlist_threshold: number;
+  allow_repeat_users: boolean;
   created_at: string | null;
   updated_at: string | null;
 };

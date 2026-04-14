@@ -20,9 +20,11 @@ from app.schemas.admin import (
     AnalyticsSummaryResponse,
     AttemptAnalyticsRow,
     BootstrapVerifyBody,
-    ContentSubjectCreateBody,
-    ContentSubjectRow,
-    ContentSubjectsResponse,
+    ContestSettingCreateBody,
+    ContestSettingRow,
+    ContestSettingsResponse,
+    ContestSettingSeasonBody,
+    ContestSettingShortlistBody,
     ContentAnalysisScoresResponse,
     CreatedAdminCredentials,
     OkResponse,
@@ -40,6 +42,7 @@ from app.schemas.admin import (
     ScoreReviewUpdateBody,
     ScoreReviewUpdateResponse,
     ScoreHighlightsResponse,
+    ShortlistScoresResponse,
     SetupStatusResponse,
     ScoresSummary,
     TokenResponse,
@@ -52,6 +55,7 @@ from app.services.content_analysis_service import (
     get_score_detail,
     get_score_review_history,
     list_scores,
+    list_shortlisted_scores,
     list_score_highlights,
     list_user_scores_by_email,
     scores_summary,
@@ -210,8 +214,8 @@ def disable_admin_user(
     return OkResponse(ok=True)
 
 
-@router.get("/content-subjects", response_model=ContentSubjectsResponse)
-def list_content_subjects(
+@router.get("/contest-settings", response_model=ContestSettingsResponse)
+def list_contest_settings(
     token: Annotated[str, Depends(_auth_header)],
     include_deleted: bool = False,
 ):
@@ -219,8 +223,8 @@ def list_content_subjects(
         admin_service.assert_admin_token(token)
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e)) from e
-    rows = admin_service.list_content_subjects(include_deleted=include_deleted)
-    return ContentSubjectsResponse(subjects=[ContentSubjectRow(**r.__dict__) for r in rows])
+    rows = admin_service.list_contest_settings(include_deleted=include_deleted)
+    return ContestSettingsResponse(settings=[ContestSettingRow(**r.__dict__) for r in rows])
 
 
 @router.get("/question-banks", response_model=QuestionBanksResponse)
@@ -496,9 +500,9 @@ def delete_pending_question_bank_admin(
     return OkResponse(ok=True)
 
 
-@router.post("/content-subjects", response_model=ContentSubjectRow)
-def add_content_subject(
-    body: ContentSubjectCreateBody,
+@router.post("/contest-settings", response_model=ContestSettingRow)
+def add_contest_setting(
+    body: ContestSettingCreateBody,
     token: Annotated[str, Depends(_auth_header)],
 ):
     try:
@@ -506,22 +510,27 @@ def add_content_subject(
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e)) from e
     try:
-        row = admin_service.add_content_subject(
+        row = admin_service.add_contest_setting(
             subject_name=body.subject_name,
             subject_description=body.subject_description,
             is_active=body.is_active,
+            season_start_date=body.season_start_date,
+            season_end_date=body.season_end_date,
+            shortlist_threshold=body.shortlist_threshold,
+            allow_repeat_users=body.allow_repeat_users,
             actor_user_id=actor,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    return ContentSubjectRow(**row.__dict__)
+    return ContestSettingRow(**row.__dict__)
 
 
-@router.post("/content-subjects/{subject_id}/soft-delete", response_model=OkResponse)
-def soft_delete_content_subject(
-    subject_id: int,
+@router.patch("/contest-settings/{setting_id}/season", response_model=ContestSettingRow)
+def update_contest_setting_season(
+    setting_id: int,
+    body: ContestSettingSeasonBody,
     token: Annotated[str, Depends(_auth_header)],
 ):
     try:
@@ -529,7 +538,54 @@ def soft_delete_content_subject(
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e)) from e
     try:
-        admin_service.soft_delete_content_subject(subject_id=subject_id, actor_user_id=actor)
+        row = admin_service.update_contest_setting_season(
+            setting_id=setting_id,
+            season_start_date=body.season_start_date,
+            season_end_date=body.season_end_date,
+            actor_user_id=actor,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return ContestSettingRow(**row.__dict__)
+
+
+@router.patch("/contest-settings/{setting_id}/shortlist-threshold", response_model=ContestSettingRow)
+def update_contest_setting_shortlist(
+    setting_id: int,
+    body: ContestSettingShortlistBody,
+    token: Annotated[str, Depends(_auth_header)],
+):
+    try:
+        actor = admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    try:
+        row = admin_service.update_contest_setting_shortlist(
+            setting_id=setting_id,
+            shortlist_threshold=body.shortlist_threshold,
+            allow_repeat_users=body.allow_repeat_users,
+            actor_user_id=actor,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return ContestSettingRow(**row.__dict__)
+
+
+@router.post("/contest-settings/{setting_id}/deactivate", response_model=OkResponse)
+def deactivate_contest_setting(
+    setting_id: int,
+    token: Annotated[str, Depends(_auth_header)],
+):
+    try:
+        actor = admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    try:
+        admin_service.deactivate_contest_setting(setting_id=setting_id, actor_user_id=actor)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
@@ -665,6 +721,38 @@ def admin_content_analysis_scores(
         limit=max(1, min(limit, 200)),
         offset=max(0, offset),
         summary=ScoresSummary(**summary),
+        rows=rows,
+    )
+
+
+@router.get("/content-analysis/shortlist-scores", response_model=ShortlistScoresResponse)
+def admin_content_analysis_shortlist_scores(
+    token: Annotated[str, Depends(_auth_header)],
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Top ``shortlist_threshold`` percent of scores (by weighted score), from the active contest setting."""
+    try:
+        admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    result = list_shortlisted_scores(limit=limit, offset=offset)
+    if result is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No active contest setting. Configure one under Contest settings and mark it active.",
+        )
+    rows, total, meta = result
+    lim = max(1, min(limit, 200))
+    off = max(0, offset)
+    return ShortlistScoresResponse(
+        total=total,
+        limit=lim,
+        offset=off,
+        threshold_percent=meta["threshold_percent"],
+        repeat_users=bool(meta["repeat_users"]),
+        total_scores_in_pool=meta["total_scores_in_pool"],
+        shortlist_size=meta["shortlist_size"],
         rows=rows,
     )
 

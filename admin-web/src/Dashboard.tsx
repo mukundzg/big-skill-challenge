@@ -6,7 +6,8 @@ import { ContentAnalysisPanel } from './panels/ContentAnalysisPanel';
 import { OverviewPanel } from './panels/OverviewPanel';
 import { QuestionBanksPanel } from './panels/QuestionBanksPanel';
 import { QuizSettingsPanel } from './panels/QuizSettingsPanel';
-import { SubjectsPanel } from './panels/SubjectsPanel';
+import { ContestSettingsPanel } from './panels/ContestSettingsPanel';
+import { ShortlistPanel } from './panels/ShortlistPanel';
 
 export type NavId =
   | 'overview'
@@ -14,7 +15,8 @@ export type NavId =
   | 'quiz-settings'
   | 'analytics'
   | 'content-analysis'
-  | 'subjects'
+  | 'contest-settings'
+  | 'shortlist'
   | 'admins';
 
 const NAV: { id: NavId; label: string }[] = [
@@ -23,7 +25,8 @@ const NAV: { id: NavId; label: string }[] = [
   { id: 'quiz-settings', label: 'Quiz settings' },
   { id: 'analytics', label: 'Score analytics' },
   { id: 'content-analysis', label: 'Content analysis' },
-  { id: 'subjects', label: 'Subjects' },
+  { id: 'contest-settings', label: 'Contest settings' },
+  { id: 'shortlist', label: 'Shortlist' },
   { id: 'admins', label: 'Administrators' },
 ];
 
@@ -76,7 +79,10 @@ export function Dashboard({
             {nav === 'quiz-settings' && 'Edit global quiz rules stored in quiz_settings.'}
             {nav === 'analytics' && 'Browse score analytics (from scores table): per-dimension values and weighted score.'}
             {nav === 'content-analysis' && 'Analyze AI scoring across relevance, creativity, clarity, and impact with reasoning insights.'}
-            {nav === 'subjects' && 'Manage content subjects (add / soft delete / active flag).'}
+            {nav === 'contest-settings' &&
+              'Manage contest settings: evaluation subject, optional season dates, shortlist threshold, and active flag.'}
+            {nav === 'shortlist' &&
+              'View scores in the top N% by weighted score (N = active contest setting shortlist threshold).'}
             {nav === 'admins' && 'Invite or disable admin accounts.'}
           </p>
         </header>
@@ -92,7 +98,8 @@ export function Dashboard({
           {nav === 'quiz-settings' && <QuizSettingsPanel token={token} />}
           {nav === 'analytics' && <AnalyticsPanel token={token} />}
           {nav === 'content-analysis' && <ContentAnalysisPanel token={token} />}
-          {nav === 'subjects' && <SubjectsPanel token={token} />}
+          {nav === 'contest-settings' && <ContestSettingsPanel token={token} />}
+          {nav === 'shortlist' && <ShortlistPanel token={token} />}
           {nav === 'admins' && <AdminsPanel token={token} onCredentials={onCredentials} />}
         </div>
 

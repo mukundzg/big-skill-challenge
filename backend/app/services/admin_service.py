@@ -8,7 +8,7 @@ import secrets
 import string
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 import bcrypt
@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 
 from app.core.service_guard import guarded_service
 from app.db import engine, session_scope
-from app.models import ContentSubject, Role, User
+from app.models import ContestSetting, Role, User
 from app.services.verification_service import normalize_email
 
 ADMIN_ROLE_NAME = "admin"
@@ -236,35 +236,61 @@ class AdminListRow:
     created_at: str | None
 
 
+def _start_of_day(d: date) -> datetime:
+    return datetime.combine(d, time.min)
+
+
+def _end_of_day(d: date) -> datetime:
+    return datetime.combine(d, time(23, 59, 59))
+
+
+def _season_datetimes(
+    season_start_date: date | None, season_end_date: date | None
+) -> tuple[datetime | None, datetime | None]:
+    start = _start_of_day(season_start_date) if season_start_date is not None else None
+    end = _end_of_day(season_end_date) if season_end_date is not None else None
+    if start is not None and end is not None and end < start:
+        raise ValueError("Season end date must be on or after season start date.")
+    return start, end
+
+
 @dataclass
-class ContentSubjectRow:
+class ContestSettingRow:
     id: int
     subject_name: str
     subject_description: str | None
     is_active: bool
     is_deleted: bool
+    season_start: str | None
+    season_end: str | None
+    shortlist_threshold: int
+    allow_repeat_users: bool
     created_at: str | None
     updated_at: str | None
 
 
-@guarded_service("admin.list_content_subjects")
-def list_content_subjects(include_deleted: bool = False) -> list[ContentSubjectRow]:
+@guarded_service("admin.list_contest_settings")
+def list_contest_settings(include_deleted: bool = False) -> list[ContestSettingRow]:
     if engine() is None:
         return []
     with session_scope() as session:
-        q = select(ContentSubject)
+        q = select(ContestSetting)
         if not include_deleted:
-            q = q.where(ContentSubject.is_deleted.is_(False))
-        rows = session.execute(q.order_by(ContentSubject.id.desc())).scalars().all()
-        out: list[ContentSubjectRow] = []
+            q = q.where(ContestSetting.is_deleted.is_(False))
+        rows = session.execute(q.order_by(ContestSetting.id.desc())).scalars().all()
+        out: list[ContestSettingRow] = []
         for r in rows:
             out.append(
-                ContentSubjectRow(
+                ContestSettingRow(
                     id=int(r.id),
                     subject_name=r.subject_name,
                     subject_description=r.subject_description,
                     is_active=bool(r.is_active),
                     is_deleted=bool(r.is_deleted),
+                    season_start=r.season_start.isoformat() if r.season_start else None,
+                    season_end=r.season_end.isoformat() if r.season_end else None,
+                    shortlist_threshold=max(1, min(int(r.shortlist_threshold or 10), 100)),
+                    allow_repeat_users=bool(r.allow_repeat_users),
                     created_at=r.created_at.isoformat() if r.created_at else None,
                     updated_at=r.updated_at.isoformat() if r.updated_at else None,
                 )
@@ -272,23 +298,29 @@ def list_content_subjects(include_deleted: bool = False) -> list[ContentSubjectR
         return out
 
 
-@guarded_service("admin.add_content_subject")
-def add_content_subject(
+@guarded_service("admin.add_contest_setting")
+def add_contest_setting(
     subject_name: str,
     subject_description: str | None,
     is_active: bool,
+    season_start_date: date | None,
+    season_end_date: date | None,
+    shortlist_threshold: int,
+    allow_repeat_users: bool,
     actor_user_id: int | None,
-) -> ContentSubjectRow:
+) -> ContestSettingRow:
     if engine() is None:
         raise RuntimeError("Database not configured")
     name = subject_name.strip()
     if not name:
         raise ValueError("subject_name is required")
+    season_start, season_end = _season_datetimes(season_start_date, season_end_date)
+    st = max(1, min(int(shortlist_threshold), 100))
     with session_scope() as session:
         existing_name = session.execute(
-            select(ContentSubject).where(
-                ContentSubject.subject_name == name,
-                ContentSubject.is_deleted.is_(False),
+            select(ContestSetting).where(
+                ContestSetting.subject_name == name,
+                ContestSetting.is_deleted.is_(False),
             )
         ).scalar_one_or_none()
         if existing_name is not None:
@@ -297,46 +329,120 @@ def add_content_subject(
         # Explicit single-active check while adding.
         if is_active:
             active_existing = session.execute(
-                select(ContentSubject).where(
-                    ContentSubject.is_active.is_(True),
-                    ContentSubject.is_deleted.is_(False),
+                select(ContestSetting).where(
+                    ContestSetting.is_active.is_(True),
+                    ContestSetting.is_deleted.is_(False),
                 )
             ).scalar_one_or_none()
             if active_existing is not None:
                 raise ValueError(
                     f"Active subject already exists: '{active_existing.subject_name}'. "
-                    "Soft-delete/deactivate it before adding another active subject."
+                    "Deactivate it before adding another active subject."
                 )
 
-        row = ContentSubject(
+        row = ContestSetting(
             subject_name=name,
             subject_description=subject_description.strip() if subject_description else None,
             is_active=bool(is_active),
             is_deleted=False,
+            season_start=season_start,
+            season_end=season_end,
+            shortlist_threshold=st,
+            allow_repeat_users=bool(allow_repeat_users),
             created_by=actor_user_id,
             updated_by=actor_user_id,
         )
         session.add(row)
         session.flush()
-        return ContentSubjectRow(
+        return ContestSettingRow(
             id=int(row.id),
             subject_name=row.subject_name,
             subject_description=row.subject_description,
             is_active=bool(row.is_active),
             is_deleted=bool(row.is_deleted),
+            season_start=row.season_start.isoformat() if row.season_start else None,
+            season_end=row.season_end.isoformat() if row.season_end else None,
+            shortlist_threshold=max(1, min(int(row.shortlist_threshold or 10), 100)),
+            allow_repeat_users=bool(row.allow_repeat_users),
             created_at=row.created_at.isoformat() if row.created_at else None,
             updated_at=row.updated_at.isoformat() if row.updated_at else None,
         )
 
 
-@guarded_service("admin.soft_delete_content_subject")
-def soft_delete_content_subject(subject_id: int, actor_user_id: int | None) -> None:
+@guarded_service("admin.update_contest_setting_season")
+def update_contest_setting_season(
+    setting_id: int,
+    season_start_date: date | None,
+    season_end_date: date | None,
+    actor_user_id: int | None,
+) -> ContestSettingRow:
+    if engine() is None:
+        raise RuntimeError("Database not configured")
+    season_start, season_end = _season_datetimes(season_start_date, season_end_date)
+    with session_scope() as session:
+        row = session.get(ContestSetting, setting_id)
+        if row is None or bool(row.is_deleted):
+            raise ValueError("Contest setting not found")
+        row.season_start = season_start
+        row.season_end = season_end
+        row.updated_by = actor_user_id
+        session.flush()
+        return ContestSettingRow(
+            id=int(row.id),
+            subject_name=row.subject_name,
+            subject_description=row.subject_description,
+            is_active=bool(row.is_active),
+            is_deleted=bool(row.is_deleted),
+            season_start=row.season_start.isoformat() if row.season_start else None,
+            season_end=row.season_end.isoformat() if row.season_end else None,
+            shortlist_threshold=max(1, min(int(row.shortlist_threshold or 10), 100)),
+            allow_repeat_users=bool(row.allow_repeat_users),
+            created_at=row.created_at.isoformat() if row.created_at else None,
+            updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        )
+
+
+@guarded_service("admin.update_contest_setting_shortlist")
+def update_contest_setting_shortlist(
+    setting_id: int,
+    shortlist_threshold: int,
+    allow_repeat_users: bool,
+    actor_user_id: int | None,
+) -> ContestSettingRow:
+    if engine() is None:
+        raise RuntimeError("Database not configured")
+    st = max(1, min(int(shortlist_threshold), 100))
+    with session_scope() as session:
+        row = session.get(ContestSetting, setting_id)
+        if row is None or bool(row.is_deleted):
+            raise ValueError("Contest setting not found")
+        row.shortlist_threshold = st
+        row.allow_repeat_users = bool(allow_repeat_users)
+        row.updated_by = actor_user_id
+        session.flush()
+        return ContestSettingRow(
+            id=int(row.id),
+            subject_name=row.subject_name,
+            subject_description=row.subject_description,
+            is_active=bool(row.is_active),
+            is_deleted=bool(row.is_deleted),
+            season_start=row.season_start.isoformat() if row.season_start else None,
+            season_end=row.season_end.isoformat() if row.season_end else None,
+            shortlist_threshold=st,
+            allow_repeat_users=bool(row.allow_repeat_users),
+            created_at=row.created_at.isoformat() if row.created_at else None,
+            updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        )
+
+
+@guarded_service("admin.deactivate_contest_setting")
+def deactivate_contest_setting(setting_id: int, actor_user_id: int | None) -> None:
     if engine() is None:
         raise RuntimeError("Database not configured")
     with session_scope() as session:
-        row = session.get(ContentSubject, subject_id)
+        row = session.get(ContestSetting, setting_id)
         if row is None or bool(row.is_deleted):
-            raise ValueError("Subject not found")
+            raise ValueError("Contest setting not found")
         row.is_deleted = True
         row.is_active = False
         row.updated_by = actor_user_id
