@@ -9,8 +9,12 @@ import { SignInScreen } from './src/screens/SignInScreen';
 import { InactiveAccountScreen } from './src/screens/InactiveAccountScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
 import { QuizCompleteScreen } from './src/screens/QuizCompleteScreen';
+import { QuizCreativeScreen } from './src/screens/QuizCreativeScreen';
+import { QuizEntryAcceptedScreen } from './src/screens/QuizEntryAcceptedScreen';
+import { QuizIncorrectScreen } from './src/screens/QuizIncorrectScreen';
 import { QuizPlayScreen } from './src/screens/QuizPlayScreen';
 import { QuizPrepareScreen } from './src/screens/QuizPrepareScreen';
+import { QuizTimeoutScreen } from './src/screens/QuizTimeoutScreen';
 import { Consent } from './src/screens/Consent';
 import { PaymentScreen } from './src/screens/PaymentScreen';
 
@@ -74,6 +78,26 @@ export default function App() {
             name="QuizComplete"
             component={QuizCompleteScreen}
             options={{ title: 'Complete', headerShown: true, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizCreative"
+            component={QuizCreativeScreen}
+            options={{ title: 'Creative Submission', headerShown: true, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizEntryAccepted"
+            component={QuizEntryAcceptedScreen}
+            options={{ title: 'Entry Accepted', headerShown: true, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizIncorrect"
+            component={QuizIncorrectScreen}
+            options={{ title: 'Incorrect Answer', headerShown: true, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizTimeout"
+            component={QuizTimeoutScreen}
+            options={{ title: 'Time Expired', headerShown: true, gestureEnabled: false }}
           />
           <Stack.Screen
             name="InactiveAccount"

@@ -111,3 +111,28 @@ export async function submitQuizTimeout(email: string, attemptId: number): Promi
     throw e;
   }
 }
+
+export type CreativeSubmissionResponse = {
+  submission_id: string;
+  status: 'buffered' | string;
+};
+
+export async function submitCreativeEntry(
+  userId: number,
+  attemptId: number,
+  entry: string,
+): Promise<CreativeSubmissionResponse> {
+  try {
+    return await apiPost<
+      { user_id: number; attempt_id: number; entry: string },
+      CreativeSubmissionResponse
+    >('/entry-evaluation/submit', {
+      user_id: userId,
+      attempt_id: attemptId,
+      entry,
+    });
+  } catch (e) {
+    if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
+    throw e;
+  }
+}

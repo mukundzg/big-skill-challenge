@@ -153,6 +153,11 @@ export function DashboardScreen({ navigation }: Props) {
   }, [email, navigation]);
 
   const onAddEntryPress = () => {
+    if (!dashboard) return;
+    if (dashboard.attempts_used >= dashboard.max_attempts || dashboard.attempts_remaining <= 0) {
+      showAlert('Entry limit reached', 'You have already used all 10 entries.');
+      return;
+    }
     navigation.navigate('Payment');
   };
 
@@ -172,6 +177,9 @@ export function DashboardScreen({ navigation }: Props) {
   }
 
   // --- RENDERS ---
+  const entriesExhausted =
+    (dashboard?.attempts_used ?? 0) >= (dashboard?.max_attempts ?? 10) ||
+    (dashboard?.attempts_remaining ?? 0) <= 0;
 
   const renderDashboard = () => (
     <View style={styles.tabContent}>
@@ -248,15 +256,25 @@ export function DashboardScreen({ navigation }: Props) {
 
       {/* Add Another Entry Button */}
       <Pressable
+        disabled={entriesExhausted}
         onPress={onAddEntryPress}
-        style={({ pressed }) => [styles.addEntryBtnWrap, pressed && styles.pressed]}
+        style={({ pressed }) => [
+          styles.addEntryBtnWrap,
+          pressed && !entriesExhausted && styles.pressed,
+          entriesExhausted && styles.addEntryDisabled,
+        ]}
       >
-        <LinearGradient colors={['#F59E0B', '#EA580C']} style={styles.addEntryBtn}>
+        <LinearGradient
+          colors={entriesExhausted ? ['#4b5563', '#374151'] : ['#F59E0B', '#EA580C']}
+          style={styles.addEntryBtn}
+        >
           <Text style={styles.addEntryLabel}>Add Another Entry →</Text>
         </LinearGradient>
       </Pressable>
       <Text style={styles.addEntrySub}>
-        {dashboard?.attempts_used ?? 0} of {dashboard?.max_attempts ?? 10} entries used. {dashboard?.attempts_remaining ?? 0} entries remaining.
+        {entriesExhausted
+          ? `Entry limit reached. ${dashboard?.attempts_used ?? 0} of ${dashboard?.max_attempts ?? 10} entries used.`
+          : `${dashboard?.attempts_used ?? 0} of ${dashboard?.max_attempts ?? 10} entries used. ${dashboard?.attempts_remaining ?? 0} entries remaining.`}
       </Text>
 
       {error != null && <Text style={styles.error}>{error}</Text>}
@@ -573,6 +591,9 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  addEntryDisabled: {
+    opacity: 0.7,
   },
   addEntryLabel: {
     color: '#fff',
