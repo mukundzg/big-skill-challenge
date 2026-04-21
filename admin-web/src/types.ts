@@ -160,6 +160,8 @@ export type ContestSettingRow = {
   season_end: string | null;
   shortlist_threshold: number;
   allow_repeat_users: boolean;
+  shortlist_announced: boolean;
+  winner_announced: boolean;
   created_at: string | null;
   updated_at: string | null;
 };

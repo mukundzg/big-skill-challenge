@@ -8,6 +8,7 @@ import { HomeScreen } from './src/screens/HomeScreen';
 import { SignInScreen } from './src/screens/SignInScreen';
 import { InactiveAccountScreen } from './src/screens/InactiveAccountScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
+import { ShortlistResultScreen } from './src/screens/ShortlistResultScreen';
 import { QuizCompleteScreen } from './src/screens/QuizCompleteScreen';
 import { QuizCreativeScreen } from './src/screens/QuizCreativeScreen';
 import { QuizEntryAcceptedScreen } from './src/screens/QuizEntryAcceptedScreen';
@@ -63,6 +64,11 @@ export default function App() {
             name="Dashboard"
             component={DashboardScreen}
             options={{ title: 'Dashboard', headerShown: false, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="ShortlistResult"
+            component={ShortlistResultScreen}
+            options={{ headerShown: false }}
           />
           <Stack.Screen
             name="QuizPrepare"

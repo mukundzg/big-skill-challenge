@@ -8,6 +8,7 @@ export type RootStackParamList = {
   Home: undefined;
   /** Quiz dashboard after consents (default landing when consents already accepted) */
   Dashboard: undefined;
+  ShortlistResult: undefined;
   /** PDF + Gemini loading before QuizPlay */
   QuizPrepare: { email: string };
   QuizPlay: {

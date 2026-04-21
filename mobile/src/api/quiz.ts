@@ -68,6 +68,35 @@ export type QuizEntry = {
   word_count: number | null;
 };
 
+export type QuizShortlistResult = {
+  status: string;
+  status_label: string;
+  reference: string;
+  prompt: string;
+  submission_text: string;
+  word_count: number | null;
+  submitted_at: string | null;
+  rank_position: number | null;
+  total_shortlisted: number;
+  total_entries: number;
+  weighted_score: number | null;
+  total_score: number | null;
+  engine_name: string;
+  engine_description: string;
+  engine_model_version: string | null;
+  rubric_breakdown: Array<{
+    label: string;
+    score: number;
+    max: number;
+    color: string;
+  }>;
+  next_steps: string[];
+  audit_trail: Array<{
+    event: string;
+    timestamp: string;
+  }>;
+};
+
 type QuizEntriesResponse = {
   rows: QuizEntry[];
 };
@@ -76,6 +105,15 @@ export async function fetchMyEntries(email: string): Promise<QuizEntry[]> {
   try {
     const res = await apiPost<{ email: string }, QuizEntriesResponse>('/quiz/my-entries', { email });
     return Array.isArray(res.rows) ? res.rows : [];
+  } catch (e) {
+    if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
+    throw e;
+  }
+}
+
+export async function fetchShortlistResult(email: string): Promise<QuizShortlistResult> {
+  try {
+    return await apiPost<{ email: string }, QuizShortlistResult>('/quiz/shortlist-result', { email });
   } catch (e) {
     if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
     throw e;

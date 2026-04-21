@@ -9,6 +9,32 @@ function dateOnlyFromIso(iso: string | null | undefined): string {
   return iso.slice(0, 10);
 }
 
+function hasSeasonEnded(iso: string | null | undefined): boolean {
+  if (!iso) return false;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return false;
+  return Date.now() >= t;
+}
+
+function shortlistDisabledReason(r: ContestSettingRow, loading: boolean): string | null {
+  if (loading) return 'Please wait for the current action to finish.';
+  if (r.is_deleted) return 'This contest setting is deleted.';
+  if (!r.is_active) return 'Only the active contest can announce shortlist.';
+  if (!r.season_end) return 'Set season end date first.';
+  if (!hasSeasonEnded(r.season_end)) return 'Contest end date/time is not completed yet.';
+  if (r.shortlist_announced) return 'Shortlist has already been announced.';
+  return null;
+}
+
+function winnerDisabledReason(r: ContestSettingRow, loading: boolean): string | null {
+  if (loading) return 'Please wait for the current action to finish.';
+  if (r.is_deleted) return 'This contest setting is deleted.';
+  if (!r.is_active) return 'Only the active contest can announce winner.';
+  if (!r.shortlist_announced) return 'Announce shortlist first.';
+  if (r.winner_announced) return 'Winner has already been announced.';
+  return null;
+}
+
 /** Returns normalized YYYY-MM-DD or null if empty/invalid. */
 function parseYmd(s: string): string | null {
   const t = s.trim();
@@ -166,6 +192,10 @@ export function ContestSettingsPanel({ token }: { token: string }) {
   };
 
   const onDeactivate = async (id: number) => {
+    const ok = window.confirm(
+      'Deactivate this contest setting? This will make it inactive and hidden from active contest operations.',
+    );
+    if (!ok) return;
     setErr(null);
     setLoading(true);
     try {
@@ -204,6 +234,46 @@ export function ContestSettingsPanel({ token }: { token: string }) {
           season_start_date: ds ? parseYmd(ds) : null,
           season_end_date: de ? parseYmd(de) : null,
         }),
+      });
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onAnnounceShortlist = async (id: number) => {
+    const ok = window.confirm(
+      'Announce shortlist now? This will mark current top entries as shortlisted for the active contest.',
+    );
+    if (!ok) return;
+    setErr(null);
+    setLoading(true);
+    try {
+      await api(`/admin/contest-settings/${id}/announce-shortlist`, {
+        method: 'POST',
+        token,
+      });
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onAnnounceWinner = async (id: number) => {
+    const ok = window.confirm(
+      'Announce winner now? This will mark the top shortlisted entry as winner for the active contest.',
+    );
+    if (!ok) return;
+    setErr(null);
+    setLoading(true);
+    try {
+      await api(`/admin/contest-settings/${id}/announce-winner`, {
+        method: 'POST',
+        token,
       });
       await load();
     } catch (e) {
@@ -328,11 +398,17 @@ export function ContestSettingsPanel({ token }: { token: string }) {
                 <th>Shortlist %</th>
                 <th>Mode</th>
                 <th>Update season</th>
-                <th />
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {rows.map((r) => {
+                const shortlistReason = shortlistDisabledReason(r, loading);
+                const winnerReason = winnerDisabledReason(r, loading);
+                const shortlistDisabled = shortlistReason !== null;
+                const winnerDisabled = winnerReason !== null;
+
+                return (
                 <tr key={r.id}>
                   <td>{r.id}</td>
                   <td>{r.subject_name}</td>
@@ -425,17 +501,46 @@ export function ContestSettingsPanel({ token }: { token: string }) {
                     </div>
                   </td>
                   <td>
-                    <button
-                      type="button"
-                      className="btn danger sm"
-                      onClick={() => void onDeactivate(r.id)}
-                      disabled={loading}
-                    >
-                      Deactivate
-                    </button>
+                    <div className="inline-shortlist-edit">
+                      <button
+                        type="button"
+                        className="btn outline shortlist sm"
+                        onClick={() => void onAnnounceShortlist(r.id)}
+                        disabled={shortlistDisabled}
+                        title={
+                          shortlistDisabled
+                            ? (shortlistReason ?? 'This action is currently unavailable.')
+                            : 'Announce shortlist for this contest.'
+                        }
+                      >
+                        Announce shortlist
+                      </button>
+                      <button
+                        type="button"
+                        className="btn outline winner sm"
+                        onClick={() => void onAnnounceWinner(r.id)}
+                        disabled={winnerDisabled}
+                        title={
+                          winnerDisabled
+                            ? (winnerReason ?? 'This action is currently unavailable.')
+                            : 'Announce winner from shortlisted entries.'
+                        }
+                      >
+                        Announce winner
+                      </button>
+                      <button
+                        type="button"
+                        className="btn danger sm"
+                        onClick={() => void onDeactivate(r.id)}
+                        disabled={loading}
+                      >
+                        Deactivate contest
+                      </button>
+                    </div>
                   </td>
                 </tr>
-              ))}
+              );
+              })}
               {rows.length === 0 && (
                 <tr>
                   <td colSpan={9} className="muted">

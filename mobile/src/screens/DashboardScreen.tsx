@@ -14,7 +14,14 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthApiError, isUserNotFoundError, logout } from '../api/auth';
-import { fetchMyEntries, fetchQuizDashboard, type QuizDashboard, type QuizEntry } from '../api/quiz';
+import {
+  fetchMyEntries,
+  fetchQuizDashboard,
+  fetchShortlistResult,
+  type QuizDashboard,
+  type QuizEntry,
+  type QuizShortlistResult,
+} from '../api/quiz';
 import { clearConsentsAccepted } from '../auth/consentStorage';
 import { clearSession, isLoggedIn, loadSession } from '../auth/session';
 import type { RootStackParamList } from '../navigation/types';
@@ -55,6 +62,7 @@ export function DashboardScreen({ navigation }: Props) {
   const [dashLoading, setDashLoading] = useState(false);
   const [dashboard, setDashboard] = useState<QuizDashboard | null>(null);
   const [entries, setEntries] = useState<QuizEntry[]>([]);
+  const [shortlistResult, setShortlistResult] = useState<QuizShortlistResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
@@ -70,8 +78,19 @@ export function DashboardScreen({ navigation }: Props) {
     try {
       const d = await fetchQuizDashboard(em);
       setDashboard(d);
+      if (d.shortlisted > 0) {
+        try {
+          const sr = await fetchShortlistResult(em);
+          setShortlistResult(sr);
+        } catch {
+          setShortlistResult(null);
+        }
+      } else {
+        setShortlistResult(null);
+      }
     } catch (e) {
       setDashboard(null);
+      setShortlistResult(null);
       if (e instanceof AuthApiError) {
         setError(e.message);
       } else {
@@ -186,6 +205,19 @@ export function DashboardScreen({ navigation }: Props) {
     const parsed = Date.parse(raw);
     return Number.isNaN(parsed) ? null : parsed;
   }, [dashboard?.contest_season_end]);
+  const shortlistMeta = useMemo(() => {
+    if (!shortlistResult) return 'Tap to view result';
+    const ref = shortlistResult.reference || 'Entry';
+    const rank = shortlistResult.rank_position;
+    const total = shortlistResult.total_entries;
+    if (rank != null && total > 0) {
+      const pct = Math.max((rank / total) * 100, 0.01);
+      return `${ref} · Top ${pct.toFixed(2)}%`;
+    }
+    return ref;
+  }, [shortlistResult]);
+  const isWinnerBanner = shortlistResult?.status === 'WINNER';
+  const shortlistBannerTitle = shortlistResult?.status === 'WINNER' ? "You're the Winner!" : "You're Shortlisted!";
   const contestActive = dashboard?.contest_is_active === true && contestEndMs != null && contestEndMs > nowMs;
   const timeLeft = useMemo(() => {
     if (!contestActive || contestEndMs == null) {
@@ -246,18 +278,25 @@ export function DashboardScreen({ navigation }: Props) {
 
       {/* Shortlist Banner */}
       {dashboard != null && dashboard.shortlisted > 0 && (
-        <Pressable style={({ pressed }) => [styles.shortlistCard, pressed && styles.pressed]}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.shortlistCard,
+            isWinnerBanner && styles.winnerCard,
+            pressed && styles.pressed,
+          ]}
+          onPress={() => navigation.navigate('ShortlistResult')}
+        >
           <LinearGradient
-            colors={['#F59E0B', '#EA580C']}
+            colors={isWinnerBanner ? ['#16A34A', '#15803D'] : ['#F59E0B', '#EA580C']}
             style={styles.trophyBox}
           >
-            <Text style={styles.trophyIcon}>🏆</Text>
+            <Text style={styles.trophyIcon}>{isWinnerBanner ? '👑' : '🏆'}</Text>
           </LinearGradient>
           <View style={styles.shortlistTextWrap}>
-            <Text style={styles.shortlistTitle}>You're Shortlisted!</Text>
-            <Text style={styles.shortlistMeta}>Entry #TBSC-2026-004521 · Top 0.01%</Text>
+            <Text style={styles.shortlistTitle}>{shortlistBannerTitle}</Text>
+            <Text style={[styles.shortlistMeta, isWinnerBanner && styles.winnerMeta]}>{shortlistMeta}</Text>
           </View>
-          <Text style={styles.arrowIcon}>›</Text>
+          <Text style={[styles.arrowIcon, isWinnerBanner && styles.winnerArrowIcon]}>›</Text>
         </Pressable>
       )}
 
@@ -350,14 +389,23 @@ export function DashboardScreen({ navigation }: Props) {
           const dateLabel = dt
             ? dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
             : '—';
+          const canOpenShortlistResult = entry.status === 'SHORTLISTED' || entry.status === 'WINNER';
           const statusTone =
-            entry.status === 'SUCCESS'
+            entry.status === 'SUCCESS' || entry.status === 'SHORTLISTED' || entry.status === 'WINNER'
               ? styles.entryStatusSuccess
               : entry.status === 'IN_PROGRESS'
                 ? styles.entryStatusPending
                 : styles.entryStatusFail;
           return (
-            <View key={entry.attempt_id} style={styles.entryCard}>
+            <Pressable
+              key={entry.attempt_id}
+              style={({ pressed }) => [styles.entryCard, pressed && canOpenShortlistResult && styles.pressed]}
+              onPress={() => {
+                if (!canOpenShortlistResult) return;
+                navigation.navigate('ShortlistResult');
+              }}
+              disabled={!canOpenShortlistResult}
+            >
               <View style={styles.entryHead}>
                 <Text style={[styles.entryStatus, statusTone]}>{entry.status_label}</Text>
                 <Text style={styles.entryDate}>{dateLabel}</Text>
@@ -366,7 +414,8 @@ export function DashboardScreen({ navigation }: Props) {
               {entry.word_count != null && (
                 <Text style={styles.entrySub}>{entry.word_count} words submitted</Text>
               )}
-            </View>
+              {canOpenShortlistResult && <Text style={styles.entryLink}>View result details ›</Text>}
+            </Pressable>
           );
         })
       )}
@@ -549,6 +598,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(245, 158, 11, 0.3)',
   },
+  winnerCard: {
+    backgroundColor: 'rgba(22, 163, 74, 0.08)',
+    borderColor: 'rgba(74, 222, 128, 0.35)',
+  },
   trophyBox: {
     width: 48,
     height: 48,
@@ -573,11 +626,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 2,
   },
+  winnerMeta: {
+    color: 'rgba(187, 247, 208, 0.85)',
+  },
   arrowIcon: {
     color: '#F59E0B',
     fontSize: 20,
     fontWeight: '300',
     marginLeft: 8,
+  },
+  winnerArrowIcon: {
+    color: '#4ADE80',
   },
   resumeBtn: {
     borderRadius: 14,
@@ -764,6 +823,12 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.35)',
     fontSize: 12,
     marginTop: 4,
+  },
+  entryLink: {
+    marginTop: 8,
+    color: '#F59E0B',
+    fontSize: 12,
+    fontWeight: '700',
   },
   stat: {
     fontSize: 16,

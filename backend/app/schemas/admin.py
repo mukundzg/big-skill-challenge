@@ -235,12 +235,22 @@ class ContestSettingRow(BaseModel):
     season_end: str | None = None
     shortlist_threshold: int
     allow_repeat_users: bool
+    shortlist_announced: bool = False
+    winner_announced: bool = False
     created_at: str | None = None
     updated_at: str | None = None
 
 
 class ContestSettingsResponse(BaseModel):
     settings: list[ContestSettingRow]
+
+
+class ContestAnnouncementResponse(BaseModel):
+    ok: Literal[True] = True
+    shortlisted_count: int | None = None
+    winner_score_id: int | None = None
+    winner_submission_id: int | None = None
+    winner_user_id: int | None = None
 
 
 class QuestionBankRow(BaseModel):
