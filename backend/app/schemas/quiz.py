@@ -23,6 +23,22 @@ class QuizDashboardResponse(BaseModel):
     attempts_remaining: int
     total_correct_answers: int
     total_score: float
+    contest_is_active: bool = False
+    contest_season_end: str | None = None
+
+
+class QuizEntryRow(BaseModel):
+    attempt_id: int
+    attempt_number: int
+    reference: str
+    status: str
+    status_label: str
+    submitted_at: str | None = None
+    word_count: int | None = None
+
+
+class QuizEntriesResponse(BaseModel):
+    rows: list[QuizEntryRow]
 
 
 class QuizStartResponse(BaseModel):

@@ -16,6 +16,7 @@ from app.core.service_guard import guarded_service
 from app.db import engine, session_scope
 from app.models import (
     AttemptQuestionTiming,
+    ContestSetting,
     File,
     QuizAttempt,
     QuizQuestion,
@@ -120,11 +121,14 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
             "attempts_remaining": settings["max_attempts"],
             "total_correct_answers": 0,
             "total_score": 0.0,
+            "contest_is_active": False,
+            "contest_season_end": None,
         }
 
     with session_scope() as session:
         s = _get_settings_row(session)
         max_a = int(s.max_attempts)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         used = session.execute(
             select(func.count()).select_from(QuizAttempt).where(QuizAttempt.user_id == user_id)
@@ -145,6 +149,21 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
         ).scalar_one()
         total_score = float(total_score or 0)
 
+        contest = session.execute(
+            select(ContestSetting).where(
+                ContestSetting.is_active.is_(True),
+                ContestSetting.is_deleted.is_(False),
+            )
+        ).scalar_one_or_none()
+        season_start = contest.season_start if contest is not None else None
+        season_end = contest.season_end if contest is not None else None
+        contest_is_active = bool(
+            contest is not None
+            and season_end is not None
+            and (season_start is None or season_start <= now)
+            and season_end >= now
+        )
+
         remaining = max(0, max_a - used)
 
         return {
@@ -156,7 +175,102 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
             "attempts_remaining": remaining,
             "total_correct_answers": total_correct,
             "total_score": total_score,
+            "contest_is_active": contest_is_active,
+            "contest_season_end": season_end.isoformat() if season_end else None,
         }
+
+
+@guarded_service("quiz.list_user_entries")
+def list_user_entries(user_id: int, *, limit: int = 30) -> list[dict[str, Any]]:
+    """Recent entries/attempts for the user's My Entries tab."""
+    if engine() is None:
+        return []
+
+    limit = max(1, min(limit, 100))
+    with session_scope() as session:
+        try:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT
+                      a.id AS attempt_id,
+                      a.attempt_number AS attempt_number,
+                      a.status AS attempt_status,
+                      a.created_at AS attempt_created_at,
+                      s.id AS submission_id,
+                      s.word_count AS submission_word_count,
+                      s.created_at AS submission_created_at
+                    FROM attempts a
+                    LEFT JOIN (
+                      SELECT s1.*
+                      FROM submissions s1
+                      INNER JOIN (
+                        SELECT attempt_id, MAX(id) AS max_id
+                        FROM submissions
+                        WHERE user_id = :user_id
+                        GROUP BY attempt_id
+                      ) latest ON latest.max_id = s1.id
+                    ) s ON s.attempt_id = a.id
+                    WHERE a.user_id = :user_id
+                    ORDER BY a.created_at DESC
+                    LIMIT :limit_n
+                    """
+                ),
+                {"user_id": int(user_id), "limit_n": int(limit)},
+            ).mappings().all()
+        except Exception:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT
+                      a.id AS attempt_id,
+                      a.attempt_number AS attempt_number,
+                      a.status AS attempt_status,
+                      a.created_at AS attempt_created_at,
+                      NULL AS submission_id,
+                      NULL AS submission_word_count,
+                      NULL AS submission_created_at
+                    FROM attempts a
+                    WHERE a.user_id = :user_id
+                    ORDER BY a.created_at DESC
+                    LIMIT :limit_n
+                    """
+                ),
+                {"user_id": int(user_id), "limit_n": int(limit)},
+            ).mappings().all()
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        attempt_id = int(r["attempt_id"])
+        created = r.get("submission_created_at") or r.get("attempt_created_at")
+        created_iso = created.isoformat() if created is not None else None
+        status = str(r.get("attempt_status") or "").upper()
+        if status == "SUCCESS":
+            label = "Submitted" if r.get("submission_id") else "Quiz Passed"
+        elif status in {"FAILED_WRONG", "FAILED_TIMEOUT"}:
+            label = "Quiz Failed"
+        elif status == "IN_PROGRESS":
+            label = "Incomplete"
+        else:
+            label = status.replace("_", " ").title() if status else "Unknown"
+
+        year = created.year if created is not None else datetime.now().year
+        out.append(
+            {
+                "attempt_id": attempt_id,
+                "attempt_number": int(r.get("attempt_number") or 0),
+                "reference": f"TBSC-{year}-{attempt_id:06d}",
+                "status": status,
+                "status_label": label,
+                "submitted_at": created_iso,
+                "word_count": (
+                    int(r["submission_word_count"])
+                    if r.get("submission_word_count") is not None
+                    else None
+                ),
+            }
+        )
+    return out
 
 
 def _next_attempt_number(session: Session, user_id: int) -> int:

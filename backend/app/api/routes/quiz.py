@@ -8,6 +8,8 @@ from app.schemas.quiz import (
     QuizAnswerBody,
     QuizAnswerResponse,
     QuizDashboardResponse,
+    QuizEntriesResponse,
+    QuizEntryRow,
     QuizQuestionBody,
     QuizStartResponse,
     QuizTimeoutBody,
@@ -16,6 +18,7 @@ from app.schemas.quiz import (
 from app.services.quiz_service import (
     get_dashboard_stats,
     get_question_for_attempt,
+    list_user_entries,
     get_settings,
     start_attempt,
     submit_answer,
@@ -51,7 +54,16 @@ def quiz_dashboard(body: EmailBody):
         attempts_remaining=stats["attempts_remaining"],
         total_correct_answers=stats["total_correct_answers"],
         total_score=stats["total_score"],
+        contest_is_active=stats.get("contest_is_active", False),
+        contest_season_end=stats.get("contest_season_end"),
     )
+
+
+@router.post("/my-entries", response_model=QuizEntriesResponse)
+def quiz_my_entries(body: EmailBody):
+    uid = _user_id_or_404(body.email)
+    rows = list_user_entries(uid, limit=50)
+    return QuizEntriesResponse(rows=[QuizEntryRow(**r) for r in rows])
 
 
 @router.get("/settings")

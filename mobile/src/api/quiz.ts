@@ -10,6 +10,8 @@ export type QuizDashboard = {
   total_correct_answers: number;
   total_score: number;
   shortlisted: number;
+  contest_is_active?: boolean;
+  contest_season_end?: string | null;
 };
 
 export type QuizStartResult = {
@@ -50,6 +52,30 @@ export type QuizAnswerResult = {
 export async function fetchQuizDashboard(email: string): Promise<QuizDashboard> {
   try {
     return await apiPost<{ email: string }, QuizDashboard>('/quiz/dashboard', { email });
+  } catch (e) {
+    if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
+    throw e;
+  }
+}
+
+export type QuizEntry = {
+  attempt_id: number;
+  attempt_number: number;
+  reference: string;
+  status: string;
+  status_label: string;
+  submitted_at: string | null;
+  word_count: number | null;
+};
+
+type QuizEntriesResponse = {
+  rows: QuizEntry[];
+};
+
+export async function fetchMyEntries(email: string): Promise<QuizEntry[]> {
+  try {
+    const res = await apiPost<{ email: string }, QuizEntriesResponse>('/quiz/my-entries', { email });
+    return Array.isArray(res.rows) ? res.rows : [];
   } catch (e) {
     if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
     throw e;
