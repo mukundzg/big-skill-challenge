@@ -8,6 +8,7 @@ export type RootStackParamList = {
   Home: undefined;
   /** Quiz dashboard after consents (default landing when consents already accepted) */
   Dashboard: undefined;
+  ShortlistResult: undefined;
   /** PDF + Gemini loading before QuizPlay */
   QuizPrepare: { email: string };
   QuizPlay: {
@@ -18,6 +19,18 @@ export type RootStackParamList = {
     initialQuestion: { index: number; question: string; options: string[] };
   };
   /** All questions in the attempt answered correctly */
-  QuizComplete: undefined;
+  QuizComplete: { attemptId: number };
+  /** 25-word creative entry submission */
+  QuizCreative: { attemptId: number };
+  /** Confirmation screen after creative entry submit */
+  QuizEntryAccepted: {
+    submissionId: string;
+    submittedAtIso: string;
+    wordCount: number;
+  };
+  /** Attempt ended due to incorrect answer */
+  QuizIncorrect: undefined;
+  /** Question timer expired; attempt ended */
+  QuizTimeout: undefined;
   InactiveAccount: { email: string };
 };

@@ -194,6 +194,9 @@ class QuizAttempt(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
+    contest_setting_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("contest_settings.id"), nullable=True
+    )
     file_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("files.id"), nullable=True)
     attempt_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)

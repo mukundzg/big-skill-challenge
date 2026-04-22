@@ -5,13 +5,20 @@ import type { RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = {
-  navigation: NativeStackNavigationProp<RootStackParamList, 'QuizComplete'>;
-  route: RouteProp<RootStackParamList, 'QuizComplete'>;
+  navigation: NativeStackNavigationProp<RootStackParamList, 'QuizEntryAccepted'>;
+  route: RouteProp<RootStackParamList, 'QuizEntryAccepted'>;
 };
 
-/** Shown after all questions in an attempt are answered correctly. */
-export function QuizCompleteScreen({ navigation, route }: Props) {
-  const { attemptId } = route.params;
+export function QuizEntryAcceptedScreen({ navigation, route }: Props) {
+  const { submissionId, submittedAtIso, wordCount } = route.params;
+  const submittedAt = new Date(submittedAtIso).toLocaleString('en-US', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
 
   return (
     <View style={styles.root}>
@@ -27,35 +34,48 @@ export function QuizCompleteScreen({ navigation, route }: Props) {
       </View>
 
       <View style={styles.main}>
-        <View style={styles.iconWrap}>
-          <Text style={styles.icon}>✓</Text>
+        <View style={styles.icon}>
+          <Text style={styles.iconText}>✓</Text>
         </View>
         <View style={styles.badge}>
-          <Text style={styles.badgeText}>Quiz Passed!</Text>
+          <Text style={styles.badgeText}>Entry Accepted!</Text>
         </View>
-        <Text style={styles.title}>Quiz Successful!</Text>
-        <Text style={styles.body}>
-          Congratulations. You have passed the qualification quiz.
+
+        <Text style={styles.title}>Entry Accepted!</Text>
+        <Text style={styles.sub}>Your entry has been successfully submitted and recorded.</Text>
+
+        <View style={styles.receipt}>
+          <View style={styles.row}>
+            <Text style={styles.k}>Word Count</Text>
+            <Text style={styles.v}>{wordCount} / 25 ✓</Text>
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.k}>Entry Reference</Text>
+            <Text style={styles.v}>{submissionId}</Text>
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.k}>Submitted</Text>
+            <Text style={styles.v}>{submittedAt}</Text>
+          </View>
+          <View style={[styles.row, styles.lastRow]}>
+            <Text style={styles.k}>Status</Text>
+            <Text style={[styles.v, styles.statusOk]}>Entry Recorded ✓</Text>
+          </View>
+        </View>
+
+        <Text style={styles.note}>
+          A confirmation email has been sent to your registered email address.
         </Text>
 
-        <View style={styles.promptCard}>
-          <Text style={styles.promptLabel}>Your prompt</Text>
-          <Text style={styles.promptText}>
-            "In exactly 25 words, tell us why you should win this prize."
-          </Text>
-          <Text style={styles.timerNote}>You have 120 seconds to complete your submission</Text>
-        </View>
-
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => navigation.navigate('QuizCreative', { attemptId })}
-        style={({ pressed }) => [styles.btnWrap, pressed && styles.pressed]}
-      >
-        <LinearGradient colors={['#F59E0B', '#EA580C']} style={styles.btn}>
-          <Text style={styles.btnLabel}>Begin Creative Submission</Text>
-        </LinearGradient>
-      </Pressable>
-        <Text style={styles.hint}>Timer starts when you click above.</Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => navigation.reset({ index: 0, routes: [{ name: 'Dashboard' }] })}
+          style={({ pressed }) => [styles.btnWrap, pressed && styles.pressed]}
+        >
+          <LinearGradient colors={['#F59E0B', '#EA580C']} style={styles.btn}>
+            <Text style={styles.btnText}>Return to Dashboard</Text>
+          </LinearGradient>
+        </Pressable>
       </View>
 
       <View style={styles.footer}>
@@ -101,23 +121,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#08002E',
   },
   header: {
-    paddingTop: 12,
+    paddingTop: 10,
     paddingBottom: 10,
-    alignItems: 'center',
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.08)',
     backgroundColor: 'rgba(8,0,46,0.92)',
+    alignItems: 'center',
   },
   logo: {
-    width: 180,
     height: 24,
+    width: 180,
   },
   main: {
     flex: 1,
-    justifyContent: 'center',
     paddingHorizontal: 24,
+    paddingTop: 36,
   },
-  iconWrap: {
+  icon: {
     width: 76,
     height: 76,
     borderRadius: 38,
@@ -132,93 +152,97 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 8,
   },
-  icon: {
+  iconText: {
     color: '#fff',
     fontSize: 34,
     fontWeight: '900',
   },
   badge: {
     alignSelf: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
     borderRadius: 12,
-    backgroundColor: 'rgba(74,222,128,0.14)',
     borderWidth: 1,
     borderColor: 'rgba(74,222,128,0.35)',
+    backgroundColor: 'rgba(74,222,128,0.15)',
+    paddingHorizontal: 16,
+    paddingVertical: 6,
     marginBottom: 14,
   },
   badgeText: {
     color: '#4ADE80',
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
   },
   title: {
-    fontSize: 26,
-    fontWeight: '800',
     color: '#fff',
+    fontSize: 26,
+    fontWeight: '900',
+    textAlign: 'center',
     marginBottom: 10,
-    textAlign: 'center',
   },
-  body: {
+  sub: {
+    color: 'rgba(255,255,255,0.55)',
     fontSize: 14,
-    color: 'rgba(255,255,255,0.6)',
-    lineHeight: 22,
-    marginBottom: 22,
+    lineHeight: 23,
     textAlign: 'center',
+    marginBottom: 22,
   },
-  promptCard: {
-    backgroundColor: 'rgba(255,255,255,0.07)',
+  receipt: {
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: 22,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    padding: 14,
+    marginBottom: 18,
   },
-  promptLabel: {
-    color: 'rgba(255,255,255,0.4)',
-    fontSize: 12,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    marginBottom: 6,
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.07)',
+    paddingVertical: 6,
+    gap: 12,
   },
-  promptText: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 14,
-    lineHeight: 22,
-    fontStyle: 'italic',
-    marginBottom: 10,
+  lastRow: {
+    borderBottomWidth: 0,
   },
-  timerNote: {
-    color: '#F59E0B',
+  k: {
+    color: 'rgba(255,255,255,0.45)',
     fontSize: 13,
-    fontWeight: '700',
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.1)',
+  },
+  v: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 13,
+    fontWeight: '600',
+    flexShrink: 1,
+    textAlign: 'right',
+  },
+  statusOk: {
+    color: '#4ADE80',
+  },
+  note: {
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 22,
   },
   btnWrap: {
     borderRadius: 999,
     overflow: 'hidden',
   },
   btn: {
-    minHeight: 54,
+    minHeight: 52,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 20,
   },
-  pressed: {
-    opacity: 0.92,
-  },
-  btnLabel: {
+  btnText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '900',
   },
-  hint: {
-    marginTop: 10,
-    textAlign: 'center',
-    color: 'rgba(255,255,255,0.35)',
-    fontSize: 13,
+  pressed: {
+    opacity: 0.92,
   },
   footer: {
     backgroundColor: 'rgba(0,0,0,0.35)',

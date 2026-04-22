@@ -23,6 +23,44 @@ class QuizDashboardResponse(BaseModel):
     attempts_remaining: int
     total_correct_answers: int
     total_score: float
+    shortlisted: int = 0
+    contest_is_active: bool = False
+    contest_season_end: str | None = None
+
+
+class QuizShortlistResultResponse(BaseModel):
+    status: str
+    status_label: str
+    reference: str
+    prompt: str
+    submission_text: str
+    word_count: int | None = None
+    submitted_at: str | None = None
+    rank_position: int | None = None
+    total_shortlisted: int = 0
+    total_entries: int = 0
+    weighted_score: float | None = None
+    total_score: int | None = None
+    engine_name: str = "Lucid Engine AI™"
+    engine_description: str = ""
+    engine_model_version: str | None = None
+    rubric_breakdown: list[dict[str, int | str]] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    audit_trail: list[dict[str, str]] = Field(default_factory=list)
+
+
+class QuizEntryRow(BaseModel):
+    attempt_id: int
+    attempt_number: int
+    reference: str
+    status: str
+    status_label: str
+    submitted_at: str | None = None
+    word_count: int | None = None
+
+
+class QuizEntriesResponse(BaseModel):
+    rows: list[QuizEntryRow]
 
 
 class QuizStartResponse(BaseModel):

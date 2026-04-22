@@ -10,6 +10,8 @@ export type QuizDashboard = {
   total_correct_answers: number;
   total_score: number;
   shortlisted: number;
+  contest_is_active?: boolean;
+  contest_season_end?: string | null;
 };
 
 export type QuizStartResult = {
@@ -50,6 +52,68 @@ export type QuizAnswerResult = {
 export async function fetchQuizDashboard(email: string): Promise<QuizDashboard> {
   try {
     return await apiPost<{ email: string }, QuizDashboard>('/quiz/dashboard', { email });
+  } catch (e) {
+    if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
+    throw e;
+  }
+}
+
+export type QuizEntry = {
+  attempt_id: number;
+  attempt_number: number;
+  reference: string;
+  status: string;
+  status_label: string;
+  submitted_at: string | null;
+  word_count: number | null;
+};
+
+export type QuizShortlistResult = {
+  status: string;
+  status_label: string;
+  reference: string;
+  prompt: string;
+  submission_text: string;
+  word_count: number | null;
+  submitted_at: string | null;
+  rank_position: number | null;
+  total_shortlisted: number;
+  total_entries: number;
+  weighted_score: number | null;
+  total_score: number | null;
+  engine_name: string;
+  engine_description: string;
+  engine_model_version: string | null;
+  rubric_breakdown: Array<{
+    label: string;
+    score: number;
+    max: number;
+    color: string;
+  }>;
+  next_steps: string[];
+  audit_trail: Array<{
+    event: string;
+    timestamp: string;
+  }>;
+};
+
+type QuizEntriesResponse = {
+  rows: QuizEntry[];
+};
+
+export async function fetchMyEntries(email: string): Promise<QuizEntry[]> {
+  try {
+    const res = await apiPost<{ email: string }, QuizEntriesResponse>('/quiz/my-entries', { email });
+    return Array.isArray(res.rows) ? res.rows : [];
+  } catch (e) {
+    if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
+    throw e;
+  }
+}
+
+export async function fetchShortlistResult(email: string): Promise<QuizShortlistResult> {
+  try {
+    return await apiPost<{ email: string }, QuizShortlistResult>('/quiz/shortlist-result', { email });
   } catch (e) {
     if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
     throw e;
@@ -105,6 +169,31 @@ export async function submitQuizTimeout(email: string, attemptId: number): Promi
     return await apiPost<{ email: string; attempt_id: number }, QuizTimeoutResponse>('/quiz/timeout', {
       email,
       attempt_id: attemptId,
+    });
+  } catch (e) {
+    if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
+    throw e;
+  }
+}
+
+export type CreativeSubmissionResponse = {
+  submission_id: string;
+  status: 'buffered' | string;
+};
+
+export async function submitCreativeEntry(
+  userId: number,
+  attemptId: number,
+  entry: string,
+): Promise<CreativeSubmissionResponse> {
+  try {
+    return await apiPost<
+      { user_id: number; attempt_id: number; entry: string },
+      CreativeSubmissionResponse
+    >('/entry-evaluation/submit', {
+      user_id: userId,
+      attempt_id: attemptId,
+      entry,
     });
   } catch (e) {
     if (e instanceof ApiError) throw AuthApiError.fromApiError(e);

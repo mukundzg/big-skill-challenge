@@ -82,6 +82,12 @@
   font-size: 0.95rem;
 }
 
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: grayscale(20%);
+}
+
 .btn.primary {
   background: #2563eb;
   color: #fff;
@@ -291,6 +297,26 @@
 
 .btn.outline:hover {
   background: #1e293b;
+}
+
+.btn.shortlist {
+  background: #f97316;
+  border-color: #ea580c;
+  color: #fff;
+}
+
+.btn.shortlist:hover {
+  background: #ea580c;
+}
+
+.btn.winner {
+  background: #16a34a;
+  border-color: #15803d;
+  color: #fff;
+}
+
+.btn.winner:hover {
+  background: #15803d;
 }
 
 .btn.full {

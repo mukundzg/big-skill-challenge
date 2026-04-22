@@ -21,6 +21,7 @@ from app.schemas.admin import (
     AttemptAnalyticsRow,
     BootstrapVerifyBody,
     ContestSettingCreateBody,
+    ContestAnnouncementResponse,
     ContestSettingRow,
     ContestSettingsResponse,
     ContestSettingSeasonBody,
@@ -591,6 +592,42 @@ def deactivate_contest_setting(
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     return OkResponse(ok=True)
+
+
+@router.post("/contest-settings/{setting_id}/announce-shortlist", response_model=ContestAnnouncementResponse)
+def announce_contest_shortlist(
+    setting_id: int,
+    token: Annotated[str, Depends(_auth_header)],
+):
+    try:
+        actor = admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    try:
+        out = admin_service.announce_contest_shortlist(setting_id=setting_id, actor_user_id=actor)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return ContestAnnouncementResponse(**out)
+
+
+@router.post("/contest-settings/{setting_id}/announce-winner", response_model=ContestAnnouncementResponse)
+def announce_contest_winner(
+    setting_id: int,
+    token: Annotated[str, Depends(_auth_header)],
+):
+    try:
+        actor = admin_service.assert_admin_token(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    try:
+        out = admin_service.announce_contest_winner(setting_id=setting_id, actor_user_id=actor)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return ContestAnnouncementResponse(**out)
 
 
 @router.get("/quiz-settings", response_model=QuizSettingsResponse)

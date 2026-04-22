@@ -16,12 +16,154 @@ from app.core.service_guard import guarded_service
 from app.db import engine, session_scope
 from app.models import (
     AttemptQuestionTiming,
+    ContestSetting,
     File,
     QuizAttempt,
     QuizQuestion,
     QuizSettings,
     User,
 )
+
+SHORTLIST_PROMPT_TEXT = 'In exactly 25 words, tell us why you should win this prize.'
+SHORTLIST_ENGINE_NAME = "Lucid Engine AI™"
+SHORTLIST_ENGINE_DESC = (
+    "Structured deterministic evaluation engine, not generative AI. "
+    "Scores against a fixed rubric. Final winners confirmed exclusively by 3 independent human judges."
+)
+SHORTLIST_ENGINE_MODEL = "Lucid Engine AI™ v2.1.4"
+SHORTLIST_NEXT_STEPS = [
+    "3 independent judges score your entry separately — no judge sees others' scores",
+    "All judges complete evaluation before scores are aggregated",
+    "Tied entries subject to secondary review and consensus",
+    "Independent scrutineer verifies the process and confirms the final result",
+    "Winners announced at competition close",
+]
+
+
+def _ensure_contest_result_table(session) -> None:
+    session.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS contest_entry_results (
+              id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+              contest_setting_id BIGINT NOT NULL,
+              score_id BIGINT NOT NULL,
+              submission_id BIGINT NOT NULL,
+              attempt_id BIGINT NULL,
+              user_id BIGINT NOT NULL,
+              status VARCHAR(32) NOT NULL,
+              rank_position BIGINT NOT NULL,
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              UNIQUE KEY uq_contest_score (contest_setting_id, score_id),
+              INDEX idx_contest_status (contest_setting_id, status),
+              INDEX idx_contest_user (contest_setting_id, user_id),
+              INDEX idx_contest_attempt (contest_setting_id, attempt_id)
+            )
+            """
+        )
+    )
+
+
+def _ensure_contest_link_columns(session) -> None:
+    db_name = session.execute(text("SELECT DATABASE()")).scalar()
+    if db_name:
+        attempts_col_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'attempts'
+                  AND COLUMN_NAME = 'contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not attempts_col_exists:
+            session.execute(
+                text(
+                    """
+                    ALTER TABLE attempts
+                    ADD COLUMN contest_setting_id BIGINT NULL
+                    """
+                )
+            )
+        attempts_idx_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.STATISTICS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'attempts'
+                  AND INDEX_NAME = 'idx_attempts_contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not attempts_idx_exists:
+            session.execute(
+                text(
+                    """
+                    CREATE INDEX idx_attempts_contest_setting_id
+                    ON attempts(contest_setting_id)
+                    """
+                )
+            )
+        submissions_col_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'submissions'
+                  AND COLUMN_NAME = 'contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not submissions_col_exists:
+            session.execute(
+                text(
+                    """
+                    ALTER TABLE submissions
+                    ADD COLUMN contest_setting_id BIGINT NULL
+                    """
+                )
+            )
+        submissions_idx_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.STATISTICS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'submissions'
+                  AND INDEX_NAME = 'idx_submissions_contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not submissions_idx_exists:
+            session.execute(
+                text(
+                    """
+                    CREATE INDEX idx_submissions_contest_setting_id
+                    ON submissions(contest_setting_id)
+                    """
+                )
+            )
+    # Backfill missing submission links from attempts whenever possible.
+    session.execute(
+        text(
+            """
+            UPDATE submissions s
+            INNER JOIN attempts a ON a.id = s.attempt_id
+            SET s.contest_setting_id = a.contest_setting_id
+            WHERE s.contest_setting_id IS NULL
+              AND a.contest_setting_id IS NOT NULL
+            """
+        )
+    )
 
 
 @guarded_service("quiz.sync_qbank_files")
@@ -120,11 +262,15 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
             "attempts_remaining": settings["max_attempts"],
             "total_correct_answers": 0,
             "total_score": 0.0,
+            "shortlisted": 0,
+            "contest_is_active": False,
+            "contest_season_end": None,
         }
 
     with session_scope() as session:
         s = _get_settings_row(session)
         max_a = int(s.max_attempts)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         used = session.execute(
             select(func.count()).select_from(QuizAttempt).where(QuizAttempt.user_id == user_id)
@@ -145,6 +291,37 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
         ).scalar_one()
         total_score = float(total_score or 0)
 
+        contest = session.execute(
+            select(ContestSetting).where(
+                ContestSetting.is_active.is_(True),
+                ContestSetting.is_deleted.is_(False),
+            )
+        ).scalar_one_or_none()
+        season_start = contest.season_start if contest is not None else None
+        season_end = contest.season_end if contest is not None else None
+        shortlisted = 0
+        if contest is not None:
+            _ensure_contest_result_table(session)
+            shortlisted_raw = session.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM contest_entry_results cer
+                    WHERE cer.contest_setting_id = :contest_setting_id
+                      AND cer.user_id = :user_id
+                      AND cer.status IN ('SHORTLISTED', 'WINNER')
+                    """
+                ),
+                {"contest_setting_id": int(contest.id), "user_id": int(user_id)},
+            ).scalar()
+            shortlisted = int(shortlisted_raw or 0)
+        contest_is_active = bool(
+            contest is not None
+            and season_end is not None
+            and (season_start is None or season_start <= now)
+            and season_end >= now
+        )
+
         remaining = max(0, max_a - used)
 
         return {
@@ -156,7 +333,248 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
             "attempts_remaining": remaining,
             "total_correct_answers": total_correct,
             "total_score": total_score,
+            "shortlisted": shortlisted,
+            "contest_is_active": contest_is_active,
+            "contest_season_end": season_end.isoformat() if season_end else None,
         }
+
+
+@guarded_service("quiz.get_user_shortlist_result")
+def get_user_shortlist_result(user_id: int) -> dict[str, Any] | None:
+    if engine() is None:
+        return None
+    with session_scope() as session:
+        contest = session.execute(
+            select(ContestSetting).where(
+                ContestSetting.is_active.is_(True),
+                ContestSetting.is_deleted.is_(False),
+            )
+        ).scalar_one_or_none()
+        if contest is None:
+            return None
+        _ensure_contest_result_table(session)
+        row = session.execute(
+            text(
+                """
+                SELECT
+                  cer.status,
+                  cer.rank_position,
+                  cer.score_id,
+                  cer.submission_id,
+                  cer.created_at AS shortlisted_at,
+                  sub.attempt_id,
+                  sub.text_answer,
+                  sub.word_count,
+                  sub.created_at AS submitted_at,
+                  sc.relevance,
+                  sc.creativity,
+                  sc.clarity,
+                  sc.impact,
+                  sc.weighted_score,
+                  sc.total_score,
+                  sc.evaluated_at
+                FROM contest_entry_results cer
+                INNER JOIN submissions sub ON sub.id = cer.submission_id
+                LEFT JOIN scores sc ON sc.id = cer.score_id
+                WHERE cer.contest_setting_id = :contest_setting_id
+                  AND cer.user_id = :user_id
+                  AND cer.status IN ('SHORTLISTED', 'WINNER')
+                ORDER BY
+                  CASE WHEN cer.status = 'WINNER' THEN 0 ELSE 1 END,
+                  cer.rank_position ASC,
+                  cer.id DESC
+                LIMIT 1
+                """
+            ),
+            {"contest_setting_id": int(contest.id), "user_id": int(user_id)},
+        ).mappings().one_or_none()
+        if row is None:
+            return None
+
+        total_shortlisted = int(
+            session.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM contest_entry_results
+                    WHERE contest_setting_id = :contest_setting_id
+                      AND status IN ('SHORTLISTED', 'WINNER')
+                    """
+                ),
+                {"contest_setting_id": int(contest.id)},
+            ).scalar()
+            or 0
+        )
+        total_entries = int(session.execute(text("SELECT COUNT(*) FROM scores")).scalar() or 0)
+        submitted_at = row.get("submitted_at")
+        submitted_iso = submitted_at.isoformat() if submitted_at is not None else None
+        evaluated_at = row.get("evaluated_at")
+        evaluated_iso = evaluated_at.isoformat() if evaluated_at is not None else None
+        shortlisted_at = row.get("shortlisted_at")
+        shortlisted_iso = shortlisted_at.isoformat() if shortlisted_at is not None else None
+        attempt_id = int(row.get("attempt_id") or 0)
+        year = submitted_at.year if submitted_at is not None else datetime.now().year
+        status = str(row.get("status") or "SHORTLISTED").upper()
+        relevance = int(row["relevance"]) if row.get("relevance") is not None else 0
+        creativity = int(row["creativity"]) if row.get("creativity") is not None else 0
+        clarity = int(row["clarity"]) if row.get("clarity") is not None else 0
+        impact = int(row["impact"]) if row.get("impact") is not None else 0
+        total_score_i = int(row["total_score"]) if row.get("total_score") is not None else 0
+
+        return {
+            "status": status,
+            "status_label": "Winner" if status == "WINNER" else "Shortlisted",
+            "reference": f"TBSC-{year}-{attempt_id:06d}" if attempt_id > 0 else f"TBSC-{year}-000000",
+            "prompt": SHORTLIST_PROMPT_TEXT,
+            "submission_text": str(row.get("text_answer") or ""),
+            "word_count": int(row["word_count"]) if row.get("word_count") is not None else None,
+            "submitted_at": submitted_iso,
+            "rank_position": int(row["rank_position"]) if row.get("rank_position") is not None else None,
+            "total_shortlisted": total_shortlisted,
+            "total_entries": total_entries,
+            "weighted_score": (
+                float(row["weighted_score"]) if row.get("weighted_score") is not None else None
+            ),
+            "total_score": total_score_i if row.get("total_score") is not None else None,
+            "engine_name": SHORTLIST_ENGINE_NAME,
+            "engine_description": SHORTLIST_ENGINE_DESC,
+            "engine_model_version": SHORTLIST_ENGINE_MODEL,
+            "rubric_breakdown": [
+                {"label": "Relevance to the Prompt", "score": relevance, "max": 10, "color": "#F59E0B"},
+                {"label": "Creativity & Originality", "score": creativity, "max": 10, "color": "#7C3AED"},
+                {"label": "Clarity & Expression", "score": clarity, "max": 10, "color": "#3B82F6"},
+                {"label": "Metaphorical Resonance", "score": impact, "max": 10, "color": "#EA580C"},
+            ],
+            "next_steps": SHORTLIST_NEXT_STEPS,
+            "audit_trail": [
+                {
+                    "event": "Entry submitted & sealed",
+                    "timestamp": submitted_iso or "—",
+                },
+                {
+                    "event": "AI evaluation completed",
+                    "timestamp": evaluated_iso or "—",
+                },
+                {
+                    "event": "Shortlist generated",
+                    "timestamp": shortlisted_iso or "—",
+                },
+                {
+                    "event": f"Model: {SHORTLIST_ENGINE_MODEL}",
+                    "timestamp": "Deterministic seed: 2026-Q1",
+                },
+            ],
+        }
+
+
+@guarded_service("quiz.list_user_entries")
+def list_user_entries(user_id: int, *, limit: int = 30) -> list[dict[str, Any]]:
+    """Recent entries/attempts for the user's My Entries tab."""
+    if engine() is None:
+        return []
+
+    limit = max(1, min(limit, 100))
+    with session_scope() as session:
+        _ensure_contest_link_columns(session)
+        active_contest = session.execute(
+            select(ContestSetting).where(
+                ContestSetting.is_active.is_(True),
+                ContestSetting.is_deleted.is_(False),
+            )
+        ).scalar_one_or_none()
+        if active_contest is None:
+            return []
+        params = {
+            "user_id": int(user_id),
+            "limit_n": int(limit),
+            "contest_setting_id": int(active_contest.id),
+        }
+        rows = session.execute(
+            text(
+                """
+                SELECT
+                  a.id AS attempt_id,
+                  a.attempt_number AS attempt_number,
+                  a.status AS attempt_status,
+                  a.created_at AS attempt_created_at,
+                  s.id AS submission_id,
+                  s.word_count AS submission_word_count,
+                  s.created_at AS submission_created_at,
+                  cer.contest_rank AS contest_rank
+                FROM attempts a
+                LEFT JOIN (
+                  SELECT s1.*
+                  FROM submissions s1
+                  INNER JOIN (
+                    SELECT attempt_id, MAX(id) AS max_id
+                    FROM submissions
+                    WHERE user_id = :user_id
+                      AND contest_setting_id = :contest_setting_id
+                    GROUP BY attempt_id
+                  ) latest ON latest.max_id = s1.id
+                ) s ON s.attempt_id = a.id
+                LEFT JOIN (
+                  SELECT
+                    cer1.attempt_id,
+                    MAX(
+                      CASE
+                        WHEN cer1.status = 'WINNER' THEN 2
+                        WHEN cer1.status = 'SHORTLISTED' THEN 1
+                        ELSE 0
+                      END
+                    ) AS contest_rank
+                  FROM contest_entry_results cer1
+                  WHERE cer1.contest_setting_id = :contest_setting_id
+                  GROUP BY cer1.attempt_id
+                ) cer ON cer.attempt_id = a.id
+                WHERE a.user_id = :user_id
+                  AND a.contest_setting_id = :contest_setting_id
+                ORDER BY a.created_at DESC
+                LIMIT :limit_n
+                """
+            ),
+            params,
+        ).mappings().all()
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        attempt_id = int(r["attempt_id"])
+        created = r.get("submission_created_at") or r.get("attempt_created_at")
+        created_iso = created.isoformat() if created is not None else None
+        status = str(r.get("attempt_status") or "").upper()
+        contest_rank = int(r.get("contest_rank") or 0)
+        if contest_rank >= 2:
+            status = "WINNER"
+            label = "Winner"
+        elif contest_rank == 1:
+            status = "SHORTLISTED"
+            label = "Shortlisted"
+        elif status == "SUCCESS":
+            label = "Submitted" if r.get("submission_id") else "Quiz Passed"
+        elif status in {"FAILED_WRONG", "FAILED_TIMEOUT"}:
+            label = "Quiz Failed"
+        elif status == "IN_PROGRESS":
+            label = "Incomplete"
+        else:
+            label = status.replace("_", " ").title() if status else "Unknown"
+
+        year = created.year if created is not None else datetime.now().year
+        out.append(
+            {
+                "attempt_id": attempt_id,
+                "attempt_number": int(r.get("attempt_number") or 0),
+                "reference": f"TBSC-{year}-{attempt_id:06d}",
+                "status": status,
+                "status_label": label,
+                "submitted_at": created_iso,
+                "word_count": (
+                    int(r["submission_word_count"])
+                    if r.get("submission_word_count") is not None
+                    else None
+                ),
+            }
+        )
+    return out
 
 
 def _next_attempt_number(session: Session, user_id: int) -> int:
@@ -262,10 +680,24 @@ def start_attempt(user_id: int) -> StartAttemptResult:
     source_file_name: str | None = None
 
     with session_scope() as session:
+        _ensure_contest_link_columns(session)
         settings = _get_settings_row(session)
         time_seconds = int(settings.time_per_question_seconds)
         marks_per_question = int(settings.marks_per_question)
         max_a = int(settings.max_attempts)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        active_contest = session.execute(
+            select(ContestSetting).where(
+                ContestSetting.is_active.is_(True),
+                ContestSetting.is_deleted.is_(False),
+                ContestSetting.season_start.is_not(None),
+                ContestSetting.season_end.is_not(None),
+                ContestSetting.season_start <= now,
+                ContestSetting.season_end >= now,
+            )
+        ).scalar_one_or_none()
+        if active_contest is None:
+            return StartAttemptResult(ok=False, error="No active contest available")
         used = session.execute(
             select(func.count()).select_from(QuizAttempt).where(QuizAttempt.user_id == user_id)
         ).scalar_one()
@@ -292,6 +724,7 @@ def start_attempt(user_id: int) -> StartAttemptResult:
         n = _next_attempt_number(session, user_id)
         att = QuizAttempt(
             user_id=user_id,
+            contest_setting_id=int(active_contest.id),
             file_id=picked_file_id,
             attempt_number=n,
             status="IN_PROGRESS",

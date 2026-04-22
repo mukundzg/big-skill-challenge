@@ -8,6 +8,9 @@ from app.schemas.quiz import (
     QuizAnswerBody,
     QuizAnswerResponse,
     QuizDashboardResponse,
+    QuizEntriesResponse,
+    QuizEntryRow,
+    QuizShortlistResultResponse,
     QuizQuestionBody,
     QuizStartResponse,
     QuizTimeoutBody,
@@ -16,6 +19,8 @@ from app.schemas.quiz import (
 from app.services.quiz_service import (
     get_dashboard_stats,
     get_question_for_attempt,
+    get_user_shortlist_result,
+    list_user_entries,
     get_settings,
     start_attempt,
     submit_answer,
@@ -51,7 +56,26 @@ def quiz_dashboard(body: EmailBody):
         attempts_remaining=stats["attempts_remaining"],
         total_correct_answers=stats["total_correct_answers"],
         total_score=stats["total_score"],
+        shortlisted=int(stats.get("shortlisted") or 0),
+        contest_is_active=stats.get("contest_is_active", False),
+        contest_season_end=stats.get("contest_season_end"),
     )
+
+
+@router.post("/my-entries", response_model=QuizEntriesResponse)
+def quiz_my_entries(body: EmailBody):
+    uid = _user_id_or_404(body.email)
+    rows = list_user_entries(uid, limit=50)
+    return QuizEntriesResponse(rows=[QuizEntryRow(**r) for r in rows])
+
+
+@router.post("/shortlist-result", response_model=QuizShortlistResultResponse)
+def quiz_shortlist_result(body: EmailBody):
+    uid = _user_id_or_404(body.email)
+    row = get_user_shortlist_result(uid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No shortlisted result available")
+    return QuizShortlistResultResponse(**row)
 
 
 @router.get("/settings")

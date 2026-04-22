@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -14,7 +14,14 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthApiError, isUserNotFoundError, logout } from '../api/auth';
-import { fetchQuizDashboard, type QuizDashboard } from '../api/quiz';
+import {
+  fetchMyEntries,
+  fetchQuizDashboard,
+  fetchShortlistResult,
+  type QuizDashboard,
+  type QuizEntry,
+  type QuizShortlistResult,
+} from '../api/quiz';
 import { clearConsentsAccepted } from '../auth/consentStorage';
 import { clearSession, isLoggedIn, loadSession } from '../auth/session';
 import type { RootStackParamList } from '../navigation/types';
@@ -54,20 +61,14 @@ export function DashboardScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [dashLoading, setDashLoading] = useState(false);
   const [dashboard, setDashboard] = useState<QuizDashboard | null>(null);
+  const [entries, setEntries] = useState<QuizEntry[]>([]);
+  const [shortlistResult, setShortlistResult] = useState<QuizShortlistResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [logoutBusy, setLogoutBusy] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now());
 
-  const [timeLeft, setTimeLeft] = useState({ days: 89, hours: 18, mins: 0, secs: 0 });
   useEffect(() => {
-    const timer = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev.secs > 0) return { ...prev, secs: prev.secs - 1 };
-        if (prev.mins > 0) return { ...prev, mins: prev.mins - 1, secs: 59 };
-        if (prev.hours > 0) return { ...prev, hours: prev.hours - 1, mins: 59, secs: 59 };
-        if (prev.days > 0) return { ...prev, days: prev.days - 1, hours: 23, mins: 59, secs: 59 };
-        return prev;
-      });
-    }, 1000);
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -77,8 +78,19 @@ export function DashboardScreen({ navigation }: Props) {
     try {
       const d = await fetchQuizDashboard(em);
       setDashboard(d);
+      if (d.shortlisted > 0) {
+        try {
+          const sr = await fetchShortlistResult(em);
+          setShortlistResult(sr);
+        } catch {
+          setShortlistResult(null);
+        }
+      } else {
+        setShortlistResult(null);
+      }
     } catch (e) {
       setDashboard(null);
+      setShortlistResult(null);
       if (e instanceof AuthApiError) {
         setError(e.message);
       } else {
@@ -93,6 +105,15 @@ export function DashboardScreen({ navigation }: Props) {
     }
   }, []);
 
+  const loadEntries = useCallback(async (em: string) => {
+    try {
+      const rows = await fetchMyEntries(em);
+      setEntries(rows);
+    } catch {
+      setEntries([]);
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -103,16 +124,20 @@ export function DashboardScreen({ navigation }: Props) {
         return;
       }
       setEmail(session.email);
-      await loadDash(session.email);
+      await Promise.all([loadDash(session.email), loadEntries(session.email)]);
       if (!cancelled) setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [loadDash, navigation]);
+  }, [loadDash, loadEntries, navigation]);
 
   const onAttemptPress = useCallback(async () => {
     if (!email || !dashboard) return;
+    if (dashboard.contest_is_active !== true) {
+      showAlert('No active contests', 'No active contests are available at the moment.');
+      return;
+    }
     if (dashboard.attempts_remaining <= 0) {
       showAlert('No attempts left', 'You have used all quiz attempts.');
       return;
@@ -153,15 +178,59 @@ export function DashboardScreen({ navigation }: Props) {
   }, [email, navigation]);
 
   const onAddEntryPress = () => {
+    if (!dashboard) return;
+    if (dashboard.contest_is_active !== true) {
+      showAlert('No active contests', 'No active contests are available at the moment.');
+      return;
+    }
+    if (dashboard.attempts_used >= dashboard.max_attempts || dashboard.attempts_remaining <= 0) {
+      showAlert('Entry limit reached', 'You have already used all 10 entries.');
+      return;
+    }
     navigation.navigate('Payment');
   };
 
   useEffect(() => {
     const unsub = navigation.addListener('focus', () => {
-      if (email) loadDash(email);
+      if (!email) return;
+      void loadDash(email);
+      void loadEntries(email);
     });
     return unsub;
-  }, [email, loadDash, navigation]);
+  }, [email, loadDash, loadEntries, navigation]);
+
+  const contestEndMs = useMemo(() => {
+    const raw = dashboard?.contest_season_end;
+    if (!raw) return null;
+    const parsed = Date.parse(raw);
+    return Number.isNaN(parsed) ? null : parsed;
+  }, [dashboard?.contest_season_end]);
+  const shortlistMeta = useMemo(() => {
+    if (!shortlistResult) return 'Tap to view result';
+    const ref = shortlistResult.reference || 'Entry';
+    const rank = shortlistResult.rank_position;
+    const total = shortlistResult.total_entries;
+    if (rank != null && total > 0) {
+      const pct = Math.max((rank / total) * 100, 0.01);
+      return `${ref} · Top ${pct.toFixed(2)}%`;
+    }
+    return ref;
+  }, [shortlistResult]);
+  const isWinnerBanner = shortlistResult?.status === 'WINNER';
+  const shortlistBannerTitle = shortlistResult?.status === 'WINNER' ? "You're the Winner!" : "You're Shortlisted!";
+  const contestActive = dashboard?.contest_is_active === true && contestEndMs != null && contestEndMs > nowMs;
+  const timeLeft = useMemo(() => {
+    if (!contestActive || contestEndMs == null) {
+      return { days: 0, hours: 0, mins: 0, secs: 0 };
+    }
+    const totalSec = Math.max(0, Math.floor((contestEndMs - nowMs) / 1000));
+    return {
+      days: Math.floor(totalSec / 86400),
+      hours: Math.floor((totalSec % 86400) / 3600),
+      mins: Math.floor((totalSec % 3600) / 60),
+      secs: totalSec % 60,
+    };
+  }, [contestActive, contestEndMs, nowMs]);
 
   if (loading || email == null) {
     return (
@@ -172,6 +241,10 @@ export function DashboardScreen({ navigation }: Props) {
   }
 
   // --- RENDERS ---
+  const entriesExhausted =
+    (dashboard?.attempts_used ?? 0) >= (dashboard?.max_attempts ?? 10) ||
+    (dashboard?.attempts_remaining ?? 0) <= 0 ||
+    !contestActive;
 
   const renderDashboard = () => (
     <View style={styles.tabContent}>
@@ -182,12 +255,20 @@ export function DashboardScreen({ navigation }: Props) {
           <Text style={styles.incompleteSub}>Payment received — your quiz is waiting.</Text>
         </View>
         <Pressable
-          style={({ pressed }) => [styles.resumeBtn, pressed && styles.pressed]}
+          style={({ pressed }) => [
+            styles.resumeBtn,
+            pressed && styles.pressed,
+            (!contestActive || dashLoading || dashboard?.attempts_remaining === 0) && styles.resumeDisabled,
+          ]}
           onPress={onAttemptPress}
-          disabled={dashLoading || dashboard?.attempts_remaining === 0}
+          disabled={!contestActive || dashLoading || dashboard?.attempts_remaining === 0}
         >
           <LinearGradient
-            colors={['#F59E0B', '#EA580C']}
+            colors={
+              !contestActive || dashboard?.attempts_remaining === 0
+                ? ['#4b5563', '#374151']
+                : ['#F59E0B', '#EA580C']
+            }
             style={styles.resumeBtnGradient}
           >
             <Text style={styles.resumeBtnLabel}>Resume</Text>
@@ -197,18 +278,25 @@ export function DashboardScreen({ navigation }: Props) {
 
       {/* Shortlist Banner */}
       {dashboard != null && dashboard.shortlisted > 0 && (
-        <Pressable style={({ pressed }) => [styles.shortlistCard, pressed && styles.pressed]}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.shortlistCard,
+            isWinnerBanner && styles.winnerCard,
+            pressed && styles.pressed,
+          ]}
+          onPress={() => navigation.navigate('ShortlistResult')}
+        >
           <LinearGradient
-            colors={['#F59E0B', '#EA580C']}
+            colors={isWinnerBanner ? ['#16A34A', '#15803D'] : ['#F59E0B', '#EA580C']}
             style={styles.trophyBox}
           >
-            <Text style={styles.trophyIcon}>🏆</Text>
+            <Text style={styles.trophyIcon}>{isWinnerBanner ? '👑' : '🏆'}</Text>
           </LinearGradient>
           <View style={styles.shortlistTextWrap}>
-            <Text style={styles.shortlistTitle}>You're Shortlisted!</Text>
-            <Text style={styles.shortlistMeta}>Entry #TBSC-2026-004521 · Top 0.01%</Text>
+            <Text style={styles.shortlistTitle}>{shortlistBannerTitle}</Text>
+            <Text style={[styles.shortlistMeta, isWinnerBanner && styles.winnerMeta]}>{shortlistMeta}</Text>
           </View>
-          <Text style={styles.arrowIcon}>›</Text>
+          <Text style={[styles.arrowIcon, isWinnerBanner && styles.winnerArrowIcon]}>›</Text>
         </Pressable>
       )}
 
@@ -230,33 +318,53 @@ export function DashboardScreen({ navigation }: Props) {
 
       {/* Countdown */}
       <View style={styles.cdownCard}>
-        <Text style={styles.cdownLabel}>Competition closes in:</Text>
-        <View style={styles.cdownRow}>
-          {[
-            { val: timeLeft.days, label: 'Days' },
-            { val: timeLeft.hours, label: 'Hrs' },
-            { val: timeLeft.mins, label: 'Min' },
-            { val: timeLeft.secs, label: 'Sec' },
-          ].map((timer, i) => (
-            <View key={i} style={styles.cdownBox}>
-              <Text style={styles.cdownN}>{String(timer.val).padStart(2, '0')}</Text>
-              <Text style={styles.cdownL}>{timer.label}</Text>
-            </View>
-          ))}
-        </View>
+        <Text style={styles.cdownLabel}>
+          {contestActive ? 'Competition closes in:' : 'No active contests'}
+        </Text>
+        {contestActive ? (
+          <View style={styles.cdownRow}>
+            {[
+              { val: timeLeft.days, label: 'Days' },
+              { val: timeLeft.hours, label: 'Hrs' },
+              { val: timeLeft.mins, label: 'Min' },
+              { val: timeLeft.secs, label: 'Sec' },
+            ].map((timer, i) => (
+              <View key={i} style={styles.cdownBox}>
+                <Text style={styles.cdownN}>{String(timer.val).padStart(2, '0')}</Text>
+                <Text style={styles.cdownL}>{timer.label}</Text>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Text style={styles.noContestText}>
+            No active contests right now. Entry actions are disabled until a new season is active.
+          </Text>
+        )}
       </View>
 
       {/* Add Another Entry Button */}
       <Pressable
+        disabled={entriesExhausted}
         onPress={onAddEntryPress}
-        style={({ pressed }) => [styles.addEntryBtnWrap, pressed && styles.pressed]}
+        style={({ pressed }) => [
+          styles.addEntryBtnWrap,
+          pressed && !entriesExhausted && styles.pressed,
+          entriesExhausted && styles.addEntryDisabled,
+        ]}
       >
-        <LinearGradient colors={['#F59E0B', '#EA580C']} style={styles.addEntryBtn}>
+        <LinearGradient
+          colors={entriesExhausted ? ['#4b5563', '#374151'] : ['#F59E0B', '#EA580C']}
+          style={styles.addEntryBtn}
+        >
           <Text style={styles.addEntryLabel}>Add Another Entry →</Text>
         </LinearGradient>
       </Pressable>
       <Text style={styles.addEntrySub}>
-        {dashboard?.attempts_used ?? 0} of {dashboard?.max_attempts ?? 10} entries used. {dashboard?.attempts_remaining ?? 0} entries remaining.
+        {entriesExhausted
+          ? !contestActive
+            ? 'No active contests. Add Another Entry is currently disabled.'
+            : `Entry limit reached. ${dashboard?.attempts_used ?? 0} of ${dashboard?.max_attempts ?? 10} entries used.`
+          : `${dashboard?.attempts_used ?? 0} of ${dashboard?.max_attempts ?? 10} entries used. ${dashboard?.attempts_remaining ?? 0} entries remaining.`}
       </Text>
 
       {error != null && <Text style={styles.error}>{error}</Text>}
@@ -265,15 +373,52 @@ export function DashboardScreen({ navigation }: Props) {
 
   const renderEntries = () => (
     <View style={styles.tabContent}>
-      <Text style={styles.viewTitle}>My Entries</Text>
-      <View style={[styles.card, { marginTop: 20 }]}>
-        <Text style={styles.stat}>Total score: {dashboard?.total_score.toFixed(1) ?? '0.0'}</Text>
-        <Text style={styles.stat}>
-          Correct answers (all attempts): {dashboard?.total_correct_answers ?? 0}
+      <View style={styles.entriesHead}>
+        <Text style={styles.viewTitle}>My Entries</Text>
+        <Text style={styles.entriesHeadMeta}>
+          {dashboard?.attempts_used ?? 0} of {dashboard?.max_attempts ?? 10} used
         </Text>
-        <Text style={styles.stat}>Attempts used: {dashboard?.attempts_used ?? 0}</Text>
-        <Text style={styles.stat}>Attempts remaining: {dashboard?.attempts_remaining ?? 0}</Text>
       </View>
+      {entries.length === 0 ? (
+        <View style={[styles.card, { marginTop: 12 }]}>
+          <Text style={styles.stat}>No entries found yet.</Text>
+        </View>
+      ) : (
+        entries.map((entry) => {
+          const dt = entry.submitted_at ? new Date(entry.submitted_at) : null;
+          const dateLabel = dt
+            ? dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+            : '—';
+          const canOpenShortlistResult = entry.status === 'SHORTLISTED' || entry.status === 'WINNER';
+          const statusTone =
+            entry.status === 'SUCCESS' || entry.status === 'SHORTLISTED' || entry.status === 'WINNER'
+              ? styles.entryStatusSuccess
+              : entry.status === 'IN_PROGRESS'
+                ? styles.entryStatusPending
+                : styles.entryStatusFail;
+          return (
+            <Pressable
+              key={entry.attempt_id}
+              style={({ pressed }) => [styles.entryCard, pressed && canOpenShortlistResult && styles.pressed]}
+              onPress={() => {
+                if (!canOpenShortlistResult) return;
+                navigation.navigate('ShortlistResult');
+              }}
+              disabled={!canOpenShortlistResult}
+            >
+              <View style={styles.entryHead}>
+                <Text style={[styles.entryStatus, statusTone]}>{entry.status_label}</Text>
+                <Text style={styles.entryDate}>{dateLabel}</Text>
+              </View>
+              <Text style={styles.entryRef}>{entry.reference}</Text>
+              {entry.word_count != null && (
+                <Text style={styles.entrySub}>{entry.word_count} words submitted</Text>
+              )}
+              {canOpenShortlistResult && <Text style={styles.entryLink}>View result details ›</Text>}
+            </Pressable>
+          );
+        })
+      )}
     </View>
   );
 
@@ -453,6 +598,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(245, 158, 11, 0.3)',
   },
+  winnerCard: {
+    backgroundColor: 'rgba(22, 163, 74, 0.08)',
+    borderColor: 'rgba(74, 222, 128, 0.35)',
+  },
   trophyBox: {
     width: 48,
     height: 48,
@@ -477,15 +626,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 2,
   },
+  winnerMeta: {
+    color: 'rgba(187, 247, 208, 0.85)',
+  },
   arrowIcon: {
     color: '#F59E0B',
     fontSize: 20,
     fontWeight: '300',
     marginLeft: 8,
   },
+  winnerArrowIcon: {
+    color: '#4ADE80',
+  },
   resumeBtn: {
     borderRadius: 14,
     overflow: 'hidden',
+  },
+  resumeDisabled: {
+    opacity: 0.7,
   },
   resumeBtnGradient: {
     paddingHorizontal: 20,
@@ -539,6 +697,11 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.4)',
     marginBottom: 4,
   },
+  noContestText: {
+    color: 'rgba(255,255,255,0.68)',
+    fontSize: 13,
+    lineHeight: 19,
+  },
   cdownRow: {
     flexDirection: 'row',
     gap: 8,
@@ -574,6 +737,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  addEntryDisabled: {
+    opacity: 0.7,
+  },
   addEntryLabel: {
     color: '#fff',
     fontSize: 18,
@@ -592,6 +758,77 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
+  },
+  entriesHead: {
+    marginTop: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  entriesHeadMeta: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.35)',
+  },
+  entryCard: {
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 18,
+    padding: 13,
+    marginBottom: 10,
+  },
+  entryHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  entryStatus: {
+    fontSize: 12,
+    fontWeight: '700',
+    borderRadius: 99,
+    overflow: 'hidden',
+    paddingVertical: 3,
+    paddingHorizontal: 10,
+  },
+  entryStatusSuccess: {
+    backgroundColor: 'rgba(74,222,128,0.12)',
+    color: '#4ADE80',
+    borderWidth: 1,
+    borderColor: 'rgba(74,222,128,0.25)',
+  },
+  entryStatusPending: {
+    backgroundColor: 'rgba(245,158,11,0.15)',
+    color: '#F59E0B',
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.3)',
+  },
+  entryStatusFail: {
+    backgroundColor: 'rgba(248,113,113,0.12)',
+    color: '#F87171',
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.28)',
+  },
+  entryDate: {
+    color: 'rgba(255,255,255,0.35)',
+    fontSize: 12,
+  },
+  entryRef: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 13,
+    fontFamily: 'monospace',
+  },
+  entrySub: {
+    color: 'rgba(255,255,255,0.35)',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  entryLink: {
+    marginTop: 8,
+    color: '#F59E0B',
+    fontSize: 12,
+    fontWeight: '700',
   },
   stat: {
     fontSize: 16,

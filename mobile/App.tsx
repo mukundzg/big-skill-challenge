@@ -8,9 +8,14 @@ import { HomeScreen } from './src/screens/HomeScreen';
 import { SignInScreen } from './src/screens/SignInScreen';
 import { InactiveAccountScreen } from './src/screens/InactiveAccountScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
+import { ShortlistResultScreen } from './src/screens/ShortlistResultScreen';
 import { QuizCompleteScreen } from './src/screens/QuizCompleteScreen';
+import { QuizCreativeScreen } from './src/screens/QuizCreativeScreen';
+import { QuizEntryAcceptedScreen } from './src/screens/QuizEntryAcceptedScreen';
+import { QuizIncorrectScreen } from './src/screens/QuizIncorrectScreen';
 import { QuizPlayScreen } from './src/screens/QuizPlayScreen';
 import { QuizPrepareScreen } from './src/screens/QuizPrepareScreen';
+import { QuizTimeoutScreen } from './src/screens/QuizTimeoutScreen';
 import { Consent } from './src/screens/Consent';
 import { PaymentScreen } from './src/screens/PaymentScreen';
 
@@ -61,6 +66,11 @@ export default function App() {
             options={{ title: 'Dashboard', headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
+            name="ShortlistResult"
+            component={ShortlistResultScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
             name="QuizPrepare"
             component={QuizPrepareScreen}
             options={{ headerShown: false, gestureEnabled: false }}
@@ -68,12 +78,32 @@ export default function App() {
           <Stack.Screen
             name="QuizPlay"
             component={QuizPlayScreen}
-            options={{ title: 'Question', headerShown: true, gestureEnabled: false }}
+            options={{ title: 'Question', headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
             name="QuizComplete"
             component={QuizCompleteScreen}
-            options={{ title: 'Complete', headerShown: true, gestureEnabled: false }}
+            options={{ title: 'Complete', headerShown: false, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizCreative"
+            component={QuizCreativeScreen}
+            options={{ title: 'Creative Submission', headerShown: false, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizEntryAccepted"
+            component={QuizEntryAcceptedScreen}
+            options={{ title: 'Entry Accepted', headerShown: false, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizIncorrect"
+            component={QuizIncorrectScreen}
+            options={{ title: 'Incorrect Answer', headerShown: false, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="QuizTimeout"
+            component={QuizTimeoutScreen}
+            options={{ title: 'Time Expired', headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
             name="InactiveAccount"
