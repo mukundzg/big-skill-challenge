@@ -26,6 +26,12 @@ class QuizDashboardResponse(BaseModel):
     shortlisted: int = 0
     contest_is_active: bool = False
     contest_season_end: str | None = None
+    has_resumable_attempt: bool = False
+    resumable_attempt_id: int | None = None
+    resume_question_index: int | None = None
+    resume_total_questions: int | None = None
+    resume_source_file_id: int | None = None
+    resume_source_file_name: str | None = None
 
 
 class QuizShortlistResultResponse(BaseModel):
@@ -120,3 +126,17 @@ class QuizTimeoutResponse(BaseModel):
     total_questions: int | None = None
     score: float | None = None
     error: str | None = None
+
+
+class QuizResumeResponse(BaseModel):
+    ok: bool = True
+    has_resumable_attempt: bool = False
+    attempt_id: int | None = None
+    attempt_number: int | None = None
+    total_questions: int | None = None
+    current_question_index: int | None = None
+    current_question: QuizQuestionPublic | None = None
+    time_per_question_seconds: int | None = None
+    marks_per_question: int | None = None
+    source_file_id: int | None = None
+    source_file_name: str | None = None

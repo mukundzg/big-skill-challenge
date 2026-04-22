@@ -15,6 +15,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthApiError, isUserNotFoundError, logout } from '../api/auth';
 import {
+  fetchQuizResume,
   fetchMyEntries,
   fetchQuizDashboard,
   fetchShortlistResult,
@@ -25,7 +26,7 @@ import {
 import { clearConsentsAccepted } from '../auth/consentStorage';
 import { clearSession, isLoggedIn, loadSession } from '../auth/session';
 import type { RootStackParamList } from '../navigation/types';
-import { confirmAsync, showAlert } from '../utils/dialog';
+import { showAlert } from '../utils/dialog';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -134,21 +135,34 @@ export function DashboardScreen({ navigation }: Props) {
 
   const onAttemptPress = useCallback(async () => {
     if (!email || !dashboard) return;
+    if (!dashboard.has_resumable_attempt) {
+      showAlert('Nothing to resume', 'No incomplete paid attempts were found.');
+      return;
+    }
     if (dashboard.contest_is_active !== true) {
-      showAlert('No active contests', 'No active contests are available at the moment.');
+      showAlert('Contest not active', 'Resume is available only during an active contest window.');
       return;
     }
-    if (dashboard.attempts_remaining <= 0) {
-      showAlert('No attempts left', 'You have used all quiz attempts.');
-      return;
+    try {
+      const res = await fetchQuizResume(email);
+      if (!res.ok || !res.has_resumable_attempt || !res.current_question || res.attempt_id == null) {
+        showAlert('Nothing to resume', 'No incomplete paid attempts were found.');
+        return;
+      }
+      navigation.navigate('QuizPlay', {
+        attemptId: res.attempt_id,
+        totalQuestions: res.total_questions ?? 0,
+        timePerQuestionSeconds: res.time_per_question_seconds ?? 60,
+        marksPerQuestion: res.marks_per_question ?? 10,
+        initialQuestion: res.current_question,
+      });
+    } catch (e) {
+      if (e instanceof AuthApiError) {
+        showAlert('Resume failed', e.message);
+      } else {
+        showAlert('Resume failed', e instanceof Error ? e.message : 'Please try again.');
+      }
     }
-    const ok = await confirmAsync(
-      'Start attempt?',
-      'This will count as one quiz attempt. Continue?',
-    );
-    if (!ok) return;
-    setError(null);
-    navigation.navigate('QuizPrepare', { email });
   }, [dashboard, email, navigation]);
 
   const onLogout = useCallback(async () => {
@@ -249,32 +263,32 @@ export function DashboardScreen({ navigation }: Props) {
   const renderDashboard = () => (
     <View style={styles.tabContent}>
       {/* Incomplete Entry Widget */}
-      <View style={styles.incompleteWidget}>
-        <View style={styles.incompleteTextContainer}>
-          <Text style={styles.incompleteLabel}>· Incomplete Entry</Text>
-          <Text style={styles.incompleteSub}>Payment received — your quiz is waiting.</Text>
-        </View>
-        <Pressable
-          style={({ pressed }) => [
-            styles.resumeBtn,
-            pressed && styles.pressed,
-            (!contestActive || dashLoading || dashboard?.attempts_remaining === 0) && styles.resumeDisabled,
-          ]}
-          onPress={onAttemptPress}
-          disabled={!contestActive || dashLoading || dashboard?.attempts_remaining === 0}
-        >
-          <LinearGradient
-            colors={
-              !contestActive || dashboard?.attempts_remaining === 0
-                ? ['#4b5563', '#374151']
-                : ['#F59E0B', '#EA580C']
-            }
-            style={styles.resumeBtnGradient}
+      {dashboard?.has_resumable_attempt ? (
+        <View style={styles.incompleteWidget}>
+          <View style={styles.incompleteTextContainer}>
+            <Text style={styles.incompleteLabel}>· Incomplete Entry</Text>
+            <Text style={styles.incompleteSub}>
+              Payment received — continue your same attempt from where you left off.
+            </Text>
+          </View>
+          <Pressable
+            style={({ pressed }) => [
+              styles.resumeBtn,
+              pressed && styles.pressed,
+              (!contestActive || dashLoading) && styles.resumeDisabled,
+            ]}
+            onPress={onAttemptPress}
+            disabled={!contestActive || dashLoading}
           >
-            <Text style={styles.resumeBtnLabel}>Resume</Text>
-          </LinearGradient>
-        </Pressable>
-      </View>
+            <LinearGradient
+              colors={!contestActive ? ['#4b5563', '#374151'] : ['#F59E0B', '#EA580C']}
+              style={styles.resumeBtnGradient}
+            >
+              <Text style={styles.resumeBtnLabel}>Resume</Text>
+            </LinearGradient>
+          </Pressable>
+        </View>
+      ) : null}
 
       {/* Shortlist Banner */}
       {dashboard != null && dashboard.shortlisted > 0 && (

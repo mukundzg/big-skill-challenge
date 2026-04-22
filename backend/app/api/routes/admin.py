@@ -110,7 +110,7 @@ def _resolve_register_token(raw: str) -> tuple[str, bool]:
     """Returns (mode, token) where mode is 'bootstrap' or 'admin'."""
     try:
         payload = admin_service.decode_token(raw)
-    except Exception as e:
+    except ValueError as e:
         raise HTTPException(status_code=401, detail="Invalid token") from e
     typ = payload.get("typ")
     if typ == "bootstrap":

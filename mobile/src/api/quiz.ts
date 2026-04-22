@@ -12,6 +12,12 @@ export type QuizDashboard = {
   shortlisted: number;
   contest_is_active?: boolean;
   contest_season_end?: string | null;
+  has_resumable_attempt?: boolean;
+  resumable_attempt_id?: number | null;
+  resume_question_index?: number | null;
+  resume_total_questions?: number | null;
+  resume_source_file_id?: number | null;
+  resume_source_file_name?: string | null;
 };
 
 export type QuizStartResult = {
@@ -32,6 +38,24 @@ export type QuizStartResult = {
   /** Stored bank filename (metadata) */
   source_file_name?: string | null;
   error?: string | null;
+};
+
+export type QuizResumeResult = {
+  ok: boolean;
+  has_resumable_attempt: boolean;
+  attempt_id: number | null;
+  attempt_number: number | null;
+  total_questions: number | null;
+  current_question_index: number | null;
+  current_question: {
+    index: number;
+    question: string;
+    options: string[];
+  } | null;
+  time_per_question_seconds: number | null;
+  marks_per_question: number | null;
+  source_file_id?: number | null;
+  source_file_name?: string | null;
 };
 
 export type QuizAnswerResult = {
@@ -123,6 +147,15 @@ export async function fetchShortlistResult(email: string): Promise<QuizShortlist
 export async function startQuizAttempt(email: string): Promise<QuizStartResult> {
   try {
     return await apiPost<{ email: string }, QuizStartResult>('/quiz/start', { email });
+  } catch (e) {
+    if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
+    throw e;
+  }
+}
+
+export async function fetchQuizResume(email: string): Promise<QuizResumeResult> {
+  try {
+    return await apiPost<{ email: string }, QuizResumeResult>('/quiz/resume', { email });
   } catch (e) {
     if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
     throw e;
