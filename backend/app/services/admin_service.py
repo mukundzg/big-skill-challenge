@@ -297,6 +297,64 @@ def _ensure_contest_result_table(session) -> None:
     )
 
 
+def _ensure_contest_link_columns(session) -> None:
+    db_name = session.execute(text("SELECT DATABASE()")).scalar()
+    if db_name:
+        attempts_col_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'attempts'
+                  AND COLUMN_NAME = 'contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not attempts_col_exists:
+            session.execute(
+                text(
+                    """
+                    ALTER TABLE attempts
+                    ADD COLUMN contest_setting_id BIGINT NULL
+                    """
+                )
+            )
+        submissions_col_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'submissions'
+                  AND COLUMN_NAME = 'contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not submissions_col_exists:
+            session.execute(
+                text(
+                    """
+                    ALTER TABLE submissions
+                    ADD COLUMN contest_setting_id BIGINT NULL
+                    """
+                )
+            )
+    session.execute(
+        text(
+            """
+            UPDATE submissions s
+            INNER JOIN attempts a ON a.id = s.attempt_id
+            SET s.contest_setting_id = a.contest_setting_id
+            WHERE s.contest_setting_id IS NULL
+              AND a.contest_setting_id IS NOT NULL
+            """
+        )
+    )
+
+
 def _announce_flags_by_setting(session) -> dict[int, tuple[bool, bool]]:
     _ensure_contest_result_table(session)
     rows = session.execute(
@@ -512,6 +570,7 @@ def deactivate_contest_setting(setting_id: int, actor_user_id: int | None) -> No
 
 
 def _get_shortlist_rows_for_setting(session, setting_id: int) -> tuple[list[dict[str, Any]], bool]:
+    _ensure_contest_link_columns(session)
     base = session.execute(
         text(
             """
@@ -538,7 +597,20 @@ def _get_shortlist_rows_for_setting(session, setting_id: int) -> tuple[list[dict
     threshold = max(1, min(int(base["shortlist_threshold"] or 10), 100))
     repeat_users = bool(base["allow_repeat_users"])
 
-    total_scores = int(session.execute(text("SELECT COUNT(*) FROM scores")).scalar() or 0)
+    total_scores = int(
+        session.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM scores sc
+                INNER JOIN submissions sub ON sub.id = sc.submission_id
+                WHERE sub.contest_setting_id = :setting_id
+                """
+            ),
+            {"setting_id": int(setting_id)},
+        ).scalar()
+        or 0
+    )
     if total_scores <= 0:
         return [], repeat_users
     k = min(total_scores, max(1, math.ceil(total_scores * threshold / 100.0)))
@@ -553,6 +625,8 @@ def _get_shortlist_rows_for_setting(session, setting_id: int) -> tuple[list[dict
                            ORDER BY s.weighted_score DESC, s.total_score DESC, s.evaluated_at DESC, s.id DESC
                          ) AS rn
                   FROM scores s
+                  INNER JOIN submissions sub ON sub.id = s.submission_id
+                  WHERE sub.contest_setting_id = :setting_id
                 )
                 SELECT score_id, submission_id, user_id, rn
                 FROM ranked
@@ -560,7 +634,7 @@ def _get_shortlist_rows_for_setting(session, setting_id: int) -> tuple[list[dict
                 ORDER BY rn ASC
                 """
             ),
-            {"k": int(k)},
+            {"k": int(k), "setting_id": int(setting_id)},
         ).mappings().all()
     else:
         rows = session.execute(
@@ -574,6 +648,8 @@ def _get_shortlist_rows_for_setting(session, setting_id: int) -> tuple[list[dict
                            ORDER BY s.weighted_score DESC, s.total_score DESC, s.evaluated_at DESC, s.id DESC
                          ) AS user_rn
                   FROM scores s
+                  INNER JOIN submissions sub ON sub.id = s.submission_id
+                  WHERE sub.contest_setting_id = :setting_id
                 ),
                 ranked AS (
                   SELECT score_id, submission_id, user_id,
@@ -589,7 +665,7 @@ def _get_shortlist_rows_for_setting(session, setting_id: int) -> tuple[list[dict
                 ORDER BY rn ASC
                 """
             ),
-            {"k": int(k)},
+            {"k": int(k), "setting_id": int(setting_id)},
         ).mappings().all()
 
     return [dict(r) for r in rows], repeat_users

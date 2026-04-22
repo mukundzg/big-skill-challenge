@@ -78,32 +78,32 @@ export default function App() {
           <Stack.Screen
             name="QuizPlay"
             component={QuizPlayScreen}
-            options={{ title: 'Question', headerShown: true, gestureEnabled: false }}
+            options={{ title: 'Question', headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
             name="QuizComplete"
             component={QuizCompleteScreen}
-            options={{ title: 'Complete', headerShown: true, gestureEnabled: false }}
+            options={{ title: 'Complete', headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
             name="QuizCreative"
             component={QuizCreativeScreen}
-            options={{ title: 'Creative Submission', headerShown: true, gestureEnabled: false }}
+            options={{ title: 'Creative Submission', headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
             name="QuizEntryAccepted"
             component={QuizEntryAcceptedScreen}
-            options={{ title: 'Entry Accepted', headerShown: true, gestureEnabled: false }}
+            options={{ title: 'Entry Accepted', headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
             name="QuizIncorrect"
             component={QuizIncorrectScreen}
-            options={{ title: 'Incorrect Answer', headerShown: true, gestureEnabled: false }}
+            options={{ title: 'Incorrect Answer', headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
             name="QuizTimeout"
             component={QuizTimeoutScreen}
-            options={{ title: 'Time Expired', headerShown: true, gestureEnabled: false }}
+            options={{ title: 'Time Expired', headerShown: false, gestureEnabled: false }}
           />
           <Stack.Screen
             name="InactiveAccount"

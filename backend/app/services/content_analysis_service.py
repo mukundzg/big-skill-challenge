@@ -12,11 +12,70 @@ from app.core.service_guard import guarded_service
 from app.db import engine, run_in_transaction, session_scope
 
 
-def _active_contest_window(session) -> tuple[Any, Any] | None:
+def _ensure_submission_contest_link(session) -> None:
+    db_name = session.execute(text("SELECT DATABASE()")).scalar()
+    if db_name:
+        attempts_col_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'attempts'
+                  AND COLUMN_NAME = 'contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not attempts_col_exists:
+            session.execute(
+                text(
+                    """
+                    ALTER TABLE attempts
+                    ADD COLUMN contest_setting_id BIGINT NULL
+                    """
+                )
+            )
+        submissions_col_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'submissions'
+                  AND COLUMN_NAME = 'contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not submissions_col_exists:
+            session.execute(
+                text(
+                    """
+                    ALTER TABLE submissions
+                    ADD COLUMN contest_setting_id BIGINT NULL
+                    """
+                )
+            )
+    session.execute(
+        text(
+            """
+            UPDATE submissions s
+            INNER JOIN attempts a ON a.id = s.attempt_id
+            SET s.contest_setting_id = a.contest_setting_id
+            WHERE s.contest_setting_id IS NULL
+              AND a.contest_setting_id IS NOT NULL
+            """
+        )
+    )
+
+
+def _active_contest_id(session) -> int | None:
+    _ensure_submission_contest_link(session)
     row = session.execute(
         text(
             """
-            SELECT season_start, season_end
+            SELECT id
             FROM contest_settings
             WHERE is_active = 1 AND is_deleted = 0
             LIMIT 1
@@ -25,11 +84,7 @@ def _active_contest_window(session) -> tuple[Any, Any] | None:
     ).mappings().one_or_none()
     if row is None:
         return None
-    season_start = row.get("season_start")
-    season_end = row.get("season_end")
-    if season_start is None or season_end is None:
-        return None
-    return season_start, season_end
+    return int(row["id"])
 
 
 def _coerce_reasoning(v: Any) -> dict[str, Any] | None:
@@ -87,20 +142,15 @@ def list_scores(
     offset = max(0, int(offset))
 
     with session_scope() as session:
-        active_window = _active_contest_window(session)
-    if active_window is None:
+        contest_setting_id = _active_contest_id(session)
+    if contest_setting_id is None:
         return [], 0
-    season_start, season_end = active_window
 
-    where: list[str] = [
-        "sub.created_at >= :season_start",
-        "sub.created_at <= :season_end",
-    ]
+    where: list[str] = ["sub.contest_setting_id = :contest_setting_id"]
     params: dict[str, Any] = {
         "limit": limit,
         "offset": offset,
-        "season_start": season_start,
-        "season_end": season_end,
+        "contest_setting_id": int(contest_setting_id),
     }
     if agent:
         where.append("s.agent = :agent")
@@ -167,7 +217,7 @@ def list_shortlisted_scores(
 
     threshold_q = text(
         """
-        SELECT shortlist_threshold, allow_repeat_users, season_start, season_end
+        SELECT id, shortlist_threshold, allow_repeat_users
         FROM contest_settings
         WHERE is_active = 1 AND is_deleted = 0
         LIMIT 1
@@ -178,10 +228,8 @@ def list_shortlisted_scores(
         tr = session.execute(threshold_q).mappings().one_or_none()
         if tr is None:
             return None
-        season_start = tr.get("season_start")
-        season_end = tr.get("season_end")
-        if season_start is None or season_end is None:
-            return None
+        _ensure_submission_contest_link(session)
+        contest_setting_id = int(tr["id"])
         pct = int(tr["shortlist_threshold"])
         pct = max(1, min(pct, 100))
         repeat_users = bool(tr["allow_repeat_users"])
@@ -191,10 +239,10 @@ def list_shortlisted_scores(
                 SELECT COUNT(*) AS n
                 FROM scores s
                 INNER JOIN submissions sub ON sub.id = s.submission_id
-                WHERE sub.created_at >= :season_start AND sub.created_at <= :season_end
+                WHERE sub.contest_setting_id = :contest_setting_id
                 """
             ),
-            {"season_start": season_start, "season_end": season_end},
+            {"contest_setting_id": contest_setting_id},
         ).scalar()
         n = int(n_raw or 0)
         du_raw = session.execute(
@@ -203,19 +251,19 @@ def list_shortlisted_scores(
                 SELECT COUNT(DISTINCT s.user_id) AS n
                 FROM scores s
                 INNER JOIN submissions sub ON sub.id = s.submission_id
-                WHERE sub.created_at >= :season_start AND sub.created_at <= :season_end
+                WHERE sub.contest_setting_id = :contest_setting_id
                 """
             ),
-            {"season_start": season_start, "season_end": season_end},
+            {"contest_setting_id": contest_setting_id},
         ).scalar()
         distinct_users = int(du_raw or 0)
-        return pct, repeat_users, n, distinct_users, season_start, season_end
+        return pct, repeat_users, n, distinct_users, contest_setting_id
 
     base = run_in_transaction(_threshold_and_n, operation="content_analysis.list_shortlisted_scores.meta")
     if base is None:
         return None
 
-    pct, repeat_users, n, distinct_users, season_start, season_end = base
+    pct, repeat_users, n, distinct_users, contest_setting_id = base
     if n == 0:
         return (
             [],
@@ -243,7 +291,7 @@ def list_shortlisted_scores(
           FROM scores s
           INNER JOIN submissions sub ON sub.id = s.submission_id
           LEFT JOIN users u ON u.id = s.user_id
-          WHERE sub.created_at >= :season_start AND sub.created_at <= :season_end
+          WHERE sub.contest_setting_id = :contest_setting_id
         )
         SELECT
           id, agent, relevance, creativity, clarity, impact, total_score, weighted_score,
@@ -269,7 +317,7 @@ def list_shortlisted_scores(
           FROM scores s
           INNER JOIN submissions sub ON sub.id = s.submission_id
           LEFT JOIN users u ON u.id = s.user_id
-          WHERE sub.created_at >= :season_start AND sub.created_at <= :season_end
+          WHERE sub.contest_setting_id = :contest_setting_id
         ),
         ranked AS (
           SELECT
@@ -298,8 +346,7 @@ def list_shortlisted_scores(
                 "k": k,
                 "limit": limit,
                 "offset": offset,
-                "season_start": season_start,
-                "season_end": season_end,
+                "contest_setting_id": contest_setting_id,
             },
         ).mappings().all()
 
@@ -335,16 +382,12 @@ def scores_summary(
         }
 
     with session_scope() as session:
-        active_window = _active_contest_window(session)
-    if active_window is None:
+        contest_setting_id = _active_contest_id(session)
+    if contest_setting_id is None:
         return {"count": 0, "avg": None, "min": None, "max": None}
-    season_start, season_end = active_window
 
-    where: list[str] = [
-        "sub.created_at >= :season_start",
-        "sub.created_at <= :season_end",
-    ]
-    params: dict[str, Any] = {"season_start": season_start, "season_end": season_end}
+    where: list[str] = ["sub.contest_setting_id = :contest_setting_id"]
+    params: dict[str, Any] = {"contest_setting_id": int(contest_setting_id)}
     if agent:
         where.append("s.agent = :agent")
         params["agent"] = agent
@@ -440,10 +483,9 @@ def analytics_overview_scores() -> dict[str, Any]:
         }
 
     def _work(session):
-        active_window = _active_contest_window(session)
-        if active_window is None:
+        contest_setting_id = _active_contest_id(session)
+        if contest_setting_id is None:
             return None, []
-        season_start, season_end = active_window
         agg_local = session.execute(
             text(
                 """
@@ -457,10 +499,10 @@ def analytics_overview_scores() -> dict[str, Any]:
                   COUNT(DISTINCT s.user_id) AS distinct_users
                 FROM scores s
                 INNER JOIN submissions sub ON sub.id = s.submission_id
-                WHERE sub.created_at >= :season_start AND sub.created_at <= :season_end
+                WHERE sub.contest_setting_id = :contest_setting_id
                 """
             ),
-            {"season_start": season_start, "season_end": season_end},
+            {"contest_setting_id": int(contest_setting_id)},
         ).mappings().one()
         agent_rows_local = session.execute(
             text(
@@ -468,12 +510,12 @@ def analytics_overview_scores() -> dict[str, Any]:
                 SELECT agent, COUNT(*) AS c
                 FROM scores s
                 INNER JOIN submissions sub ON sub.id = s.submission_id
-                WHERE sub.created_at >= :season_start AND sub.created_at <= :season_end
+                WHERE sub.contest_setting_id = :contest_setting_id
                 GROUP BY agent
                 ORDER BY c DESC
                 """
             ),
-            {"season_start": season_start, "season_end": season_end},
+            {"contest_setting_id": int(contest_setting_id)},
         ).mappings().all()
         return agg_local, agent_rows_local
     agg, agent_rows = run_in_transaction(_work, operation="content_analysis.analytics_overview_scores")
@@ -518,10 +560,9 @@ def list_user_scores_by_email(email: str, *, limit: int = 10) -> list[dict[str, 
         return []
     limit = max(1, min(int(limit), 10))
     with session_scope() as session:
-        active_window = _active_contest_window(session)
-    if active_window is None:
+        contest_setting_id = _active_contest_id(session)
+    if contest_setting_id is None:
         return []
-    season_start, season_end = active_window
     q = text(
         """
         SELECT
@@ -532,8 +573,7 @@ def list_user_scores_by_email(email: str, *, limit: int = 10) -> list[dict[str, 
         INNER JOIN submissions sub ON sub.id = s.submission_id
         JOIN users u ON u.id = s.user_id
         WHERE LOWER(u.email) = :email
-          AND sub.created_at >= :season_start
-          AND sub.created_at <= :season_end
+          AND sub.contest_setting_id = :contest_setting_id
         ORDER BY s.evaluated_at DESC, s.id DESC
         LIMIT :limit
         """
@@ -544,8 +584,7 @@ def list_user_scores_by_email(email: str, *, limit: int = 10) -> list[dict[str, 
             {
                 "email": e,
                 "limit": limit,
-                "season_start": season_start,
-                "season_end": season_end,
+                "contest_setting_id": int(contest_setting_id),
             },
         ).mappings().all(),
         operation="content_analysis.list_user_scores_by_email",
@@ -566,10 +605,9 @@ def list_score_highlights(*, limit: int = 20, offset: int = 0) -> tuple[list[dic
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
     with session_scope() as session:
-        active_window = _active_contest_window(session)
-    if active_window is None:
+        contest_setting_id = _active_contest_id(session)
+    if contest_setting_id is None:
         return [], 0
-    season_start, season_end = active_window
 
     # MySQL 8 window functions.
     q = text(
@@ -589,7 +627,7 @@ def list_score_highlights(*, limit: int = 20, offset: int = 0) -> tuple[list[dic
             FROM scores s
             INNER JOIN submissions sub ON sub.id = s.submission_id
             JOIN users u ON u.id = s.user_id
-            WHERE sub.created_at >= :season_start AND sub.created_at <= :season_end
+            WHERE sub.contest_setting_id = :contest_setting_id
           ) x
           WHERE x.rn = 1
         ),
@@ -609,8 +647,7 @@ def list_score_highlights(*, limit: int = 20, offset: int = 0) -> tuple[list[dic
             INNER JOIN submissions sub ON sub.id = s.submission_id
             JOIN users u ON u.id = s.user_id
             WHERE s.needs_human_review = 1
-              AND sub.created_at >= :season_start
-              AND sub.created_at <= :season_end
+              AND sub.contest_setting_id = :contest_setting_id
           ) y
           WHERE y.rn = 1
         ),
@@ -637,7 +674,7 @@ def list_score_highlights(*, limit: int = 20, offset: int = 0) -> tuple[list[dic
                    ) AS rn
             FROM scores s
             INNER JOIN submissions sub ON sub.id = s.submission_id
-            WHERE sub.created_at >= :season_start AND sub.created_at <= :season_end
+            WHERE sub.contest_setting_id = :contest_setting_id
           ) x
           WHERE rn = 1
         ),
@@ -655,8 +692,7 @@ def list_score_highlights(*, limit: int = 20, offset: int = 0) -> tuple[list[dic
                 SELECT 1
                 FROM submissions sub
                 WHERE sub.id = s.submission_id
-                  AND sub.created_at >= :season_start
-                  AND sub.created_at <= :season_end
+                  AND sub.contest_setting_id = :contest_setting_id
               )
           ) y
           WHERE rn = 1
@@ -669,7 +705,7 @@ def list_score_highlights(*, limit: int = 20, offset: int = 0) -> tuple[list[dic
         total_local = int(
             session.execute(
                 count_q,
-                {"season_start": season_start, "season_end": season_end},
+                {"contest_setting_id": int(contest_setting_id)},
             ).mappings().one()["c"]
             or 0
         )
@@ -678,8 +714,7 @@ def list_score_highlights(*, limit: int = 20, offset: int = 0) -> tuple[list[dic
             {
                 "limit": limit,
                 "offset": offset,
-                "season_start": season_start,
-                "season_end": season_end,
+                "contest_setting_id": int(contest_setting_id),
             },
         ).mappings().all()
         return total_local, rows_local

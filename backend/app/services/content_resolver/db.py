@@ -27,6 +27,64 @@ class MySQLDBHandler:
                 return value
         return value
 
+    @staticmethod
+    def _ensure_contest_link_columns(session) -> None:
+        db_name = session.execute(text("SELECT DATABASE()")).scalar()
+        if db_name:
+            attempts_col_exists = session.execute(
+                text(
+                    """
+                    SELECT COUNT(1)
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = :schema_name
+                      AND TABLE_NAME = 'attempts'
+                      AND COLUMN_NAME = 'contest_setting_id'
+                    """
+                ),
+                {"schema_name": db_name},
+            ).scalar()
+            if not attempts_col_exists:
+                session.execute(
+                    text(
+                        """
+                        ALTER TABLE attempts
+                        ADD COLUMN contest_setting_id BIGINT NULL
+                        """
+                    )
+                )
+            submissions_col_exists = session.execute(
+                text(
+                    """
+                    SELECT COUNT(1)
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = :schema_name
+                      AND TABLE_NAME = 'submissions'
+                      AND COLUMN_NAME = 'contest_setting_id'
+                    """
+                ),
+                {"schema_name": db_name},
+            ).scalar()
+            if not submissions_col_exists:
+                session.execute(
+                    text(
+                        """
+                        ALTER TABLE submissions
+                        ADD COLUMN contest_setting_id BIGINT NULL
+                        """
+                    )
+                )
+        session.execute(
+            text(
+                """
+                UPDATE submissions s
+                INNER JOIN attempts a ON a.id = s.attempt_id
+                SET s.contest_setting_id = a.contest_setting_id
+                WHERE s.contest_setting_id IS NULL
+                  AND a.contest_setting_id IS NOT NULL
+                """
+            )
+        )
+
     def initialize_schema(self) -> None:
         try:
             required = ("submissions", "scores", AUDIT_LOG_TABLE)
@@ -68,16 +126,18 @@ class MySQLDBHandler:
         mapping: Dict[int, int] = {}
         try:
             with session_scope() as session:
+                self._ensure_contest_link_columns(session)
                 submissions_sql = text(
                     """
                     INSERT INTO submissions (
                       user_id, attempt_id, text_answer, word_count,
-                      submission_status, remarks, created_by, updated_by
+                      submission_status, remarks, contest_setting_id, created_by, updated_by
                     )
-                    VALUES (
+                    SELECT
                       :user_id, :attempt_id, :text_answer, :word_count,
-                      :submission_status, :remarks, :created_by, :updated_by
-                    )
+                      :submission_status, :remarks, a.contest_setting_id, :created_by, :updated_by
+                    FROM attempts a
+                    WHERE a.id = :attempt_id
                     """
                 )
                 for item in entries:
@@ -115,16 +175,18 @@ class MySQLDBHandler:
         inserted = {"submissions": 0, "scores": 0, "audit_logs": 0}
         try:
             with session_scope() as session:
+                self._ensure_contest_link_columns(session)
                 submissions_sql = text(
                     """
                     INSERT INTO submissions (
                       user_id, attempt_id, text_answer, word_count,
-                      submission_status, remarks, created_by, updated_by
+                      submission_status, remarks, contest_setting_id, created_by, updated_by
                     )
-                    VALUES (
+                    SELECT
                       :user_id, :attempt_id, :text_answer, :word_count,
-                      :submission_status, :remarks, :created_by, :updated_by
-                    )
+                      :submission_status, :remarks, a.contest_setting_id, :created_by, :updated_by
+                    FROM attempts a
+                    WHERE a.id = :attempt_id
                     """
                 )
                 scores_sql = text(

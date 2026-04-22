@@ -65,6 +65,107 @@ def _ensure_contest_result_table(session) -> None:
     )
 
 
+def _ensure_contest_link_columns(session) -> None:
+    db_name = session.execute(text("SELECT DATABASE()")).scalar()
+    if db_name:
+        attempts_col_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'attempts'
+                  AND COLUMN_NAME = 'contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not attempts_col_exists:
+            session.execute(
+                text(
+                    """
+                    ALTER TABLE attempts
+                    ADD COLUMN contest_setting_id BIGINT NULL
+                    """
+                )
+            )
+        attempts_idx_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.STATISTICS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'attempts'
+                  AND INDEX_NAME = 'idx_attempts_contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not attempts_idx_exists:
+            session.execute(
+                text(
+                    """
+                    CREATE INDEX idx_attempts_contest_setting_id
+                    ON attempts(contest_setting_id)
+                    """
+                )
+            )
+        submissions_col_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'submissions'
+                  AND COLUMN_NAME = 'contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not submissions_col_exists:
+            session.execute(
+                text(
+                    """
+                    ALTER TABLE submissions
+                    ADD COLUMN contest_setting_id BIGINT NULL
+                    """
+                )
+            )
+        submissions_idx_exists = session.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM information_schema.STATISTICS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'submissions'
+                  AND INDEX_NAME = 'idx_submissions_contest_setting_id'
+                """
+            ),
+            {"schema_name": db_name},
+        ).scalar()
+        if not submissions_idx_exists:
+            session.execute(
+                text(
+                    """
+                    CREATE INDEX idx_submissions_contest_setting_id
+                    ON submissions(contest_setting_id)
+                    """
+                )
+            )
+    # Backfill missing submission links from attempts whenever possible.
+    session.execute(
+        text(
+            """
+            UPDATE submissions s
+            INNER JOIN attempts a ON a.id = s.attempt_id
+            SET s.contest_setting_id = a.contest_setting_id
+            WHERE s.contest_setting_id IS NULL
+              AND a.contest_setting_id IS NOT NULL
+            """
+        )
+    )
+
+
 @guarded_service("quiz.sync_qbank_files")
 def sync_qbank_files() -> int:
     """Legacy no-op. Question-bank rows are now created via admin upload endpoint."""
@@ -374,6 +475,7 @@ def list_user_entries(user_id: int, *, limit: int = 30) -> list[dict[str, Any]]:
 
     limit = max(1, min(limit, 100))
     with session_scope() as session:
+        _ensure_contest_link_columns(session)
         active_contest = session.execute(
             select(ContestSetting).where(
                 ContestSetting.is_active.is_(True),
@@ -382,92 +484,57 @@ def list_user_entries(user_id: int, *, limit: int = 30) -> list[dict[str, Any]]:
         ).scalar_one_or_none()
         if active_contest is None:
             return []
-        # Attempts do not currently store contest_setting_id, so constrain strictly to
-        # the active contest season window.
-        season_start = active_contest.season_start
-        season_end = active_contest.season_end
-        if season_start is None or season_end is None:
-            return []
         params = {
             "user_id": int(user_id),
             "limit_n": int(limit),
-            "season_start": season_start,
-            "season_end": season_end,
+            "contest_setting_id": int(active_contest.id),
         }
-        try:
-            rows = session.execute(
-                text(
-                    """
-                    SELECT
-                      a.id AS attempt_id,
-                      a.attempt_number AS attempt_number,
-                      a.status AS attempt_status,
-                      a.created_at AS attempt_created_at,
-                      s.id AS submission_id,
-                      s.word_count AS submission_word_count,
-                      s.created_at AS submission_created_at,
-                      cer.contest_rank AS contest_rank
-                    FROM attempts a
-                    LEFT JOIN (
-                      SELECT s1.*
-                      FROM submissions s1
-                      INNER JOIN (
-                        SELECT attempt_id, MAX(id) AS max_id
-                        FROM submissions
-                        WHERE user_id = :user_id
-                        GROUP BY attempt_id
-                      ) latest ON latest.max_id = s1.id
-                    ) s ON s.attempt_id = a.id
-                    LEFT JOIN (
-                      SELECT
-                        cer1.attempt_id,
-                        MAX(
-                          CASE
-                            WHEN cer1.status = 'WINNER' THEN 2
-                            WHEN cer1.status = 'SHORTLISTED' THEN 1
-                            ELSE 0
-                          END
-                        ) AS contest_rank
-                      FROM contest_entry_results cer1
-                      WHERE cer1.contest_setting_id = (
-                        SELECT cs.id
-                        FROM contest_settings cs
-                        WHERE cs.is_active = 1 AND cs.is_deleted = 0
-                        LIMIT 1
-                      )
-                      GROUP BY cer1.attempt_id
-                    ) cer ON cer.attempt_id = a.id
-                    WHERE a.user_id = :user_id
-                      AND (:season_start IS NULL OR COALESCE(s.created_at, a.created_at) >= :season_start)
-                      AND (:season_end IS NULL OR COALESCE(s.created_at, a.created_at) <= :season_end)
-                    ORDER BY a.created_at DESC
-                    LIMIT :limit_n
-                    """
-                ),
-                params,
-            ).mappings().all()
-        except Exception:
-            rows = session.execute(
-                text(
-                    """
-                    SELECT
-                      a.id AS attempt_id,
-                      a.attempt_number AS attempt_number,
-                      a.status AS attempt_status,
-                      a.created_at AS attempt_created_at,
-                      NULL AS submission_id,
-                      NULL AS submission_word_count,
-                      NULL AS submission_created_at
-                    FROM attempts a
-                    WHERE a.user_id = :user_id
-                      AND (:season_start IS NULL OR a.created_at >= :season_start)
-                      AND (:season_end IS NULL OR a.created_at <= :season_end)
-                    ORDER BY a.created_at DESC
-                    LIMIT :limit_n
-                    """
-                ),
-                params,
-            ).mappings().all()
+        rows = session.execute(
+            text(
+                """
+                SELECT
+                  a.id AS attempt_id,
+                  a.attempt_number AS attempt_number,
+                  a.status AS attempt_status,
+                  a.created_at AS attempt_created_at,
+                  s.id AS submission_id,
+                  s.word_count AS submission_word_count,
+                  s.created_at AS submission_created_at,
+                  cer.contest_rank AS contest_rank
+                FROM attempts a
+                LEFT JOIN (
+                  SELECT s1.*
+                  FROM submissions s1
+                  INNER JOIN (
+                    SELECT attempt_id, MAX(id) AS max_id
+                    FROM submissions
+                    WHERE user_id = :user_id
+                      AND contest_setting_id = :contest_setting_id
+                    GROUP BY attempt_id
+                  ) latest ON latest.max_id = s1.id
+                ) s ON s.attempt_id = a.id
+                LEFT JOIN (
+                  SELECT
+                    cer1.attempt_id,
+                    MAX(
+                      CASE
+                        WHEN cer1.status = 'WINNER' THEN 2
+                        WHEN cer1.status = 'SHORTLISTED' THEN 1
+                        ELSE 0
+                      END
+                    ) AS contest_rank
+                  FROM contest_entry_results cer1
+                  WHERE cer1.contest_setting_id = :contest_setting_id
+                  GROUP BY cer1.attempt_id
+                ) cer ON cer.attempt_id = a.id
+                WHERE a.user_id = :user_id
+                  AND a.contest_setting_id = :contest_setting_id
+                ORDER BY a.created_at DESC
+                LIMIT :limit_n
+                """
+            ),
+            params,
+        ).mappings().all()
 
     out: list[dict[str, Any]] = []
     for r in rows:
@@ -613,10 +680,24 @@ def start_attempt(user_id: int) -> StartAttemptResult:
     source_file_name: str | None = None
 
     with session_scope() as session:
+        _ensure_contest_link_columns(session)
         settings = _get_settings_row(session)
         time_seconds = int(settings.time_per_question_seconds)
         marks_per_question = int(settings.marks_per_question)
         max_a = int(settings.max_attempts)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        active_contest = session.execute(
+            select(ContestSetting).where(
+                ContestSetting.is_active.is_(True),
+                ContestSetting.is_deleted.is_(False),
+                ContestSetting.season_start.is_not(None),
+                ContestSetting.season_end.is_not(None),
+                ContestSetting.season_start <= now,
+                ContestSetting.season_end >= now,
+            )
+        ).scalar_one_or_none()
+        if active_contest is None:
+            return StartAttemptResult(ok=False, error="No active contest available")
         used = session.execute(
             select(func.count()).select_from(QuizAttempt).where(QuizAttempt.user_id == user_id)
         ).scalar_one()
@@ -643,6 +724,7 @@ def start_attempt(user_id: int) -> StartAttemptResult:
         n = _next_attempt_number(session, user_id)
         att = QuizAttempt(
             user_id=user_id,
+            contest_setting_id=int(active_contest.id),
             file_id=picked_file_id,
             attempt_number=n,
             status="IN_PROGRESS",
