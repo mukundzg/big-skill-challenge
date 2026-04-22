@@ -12,6 +12,7 @@ from app.schemas.quiz import (
     QuizEntryRow,
     QuizShortlistResultResponse,
     QuizQuestionBody,
+    QuizResumeResponse,
     QuizStartResponse,
     QuizTimeoutBody,
     QuizTimeoutResponse,
@@ -22,6 +23,7 @@ from app.services.quiz_service import (
     get_user_shortlist_result,
     list_user_entries,
     get_settings,
+    get_resumable_attempt,
     start_attempt,
     submit_answer,
     timeout_attempt,
@@ -59,6 +61,12 @@ def quiz_dashboard(body: EmailBody):
         shortlisted=int(stats.get("shortlisted") or 0),
         contest_is_active=stats.get("contest_is_active", False),
         contest_season_end=stats.get("contest_season_end"),
+        has_resumable_attempt=bool(stats.get("has_resumable_attempt") or False),
+        resumable_attempt_id=stats.get("resumable_attempt_id"),
+        resume_question_index=stats.get("resume_question_index"),
+        resume_total_questions=stats.get("resume_total_questions"),
+        resume_source_file_id=stats.get("resume_source_file_id"),
+        resume_source_file_name=stats.get("resume_source_file_name"),
     )
 
 
@@ -175,4 +183,23 @@ def quiz_timeout(body: QuizTimeoutBody, request: Request):
         correct_answers=out.get("correct_answers"),
         total_questions=out.get("total_questions"),
         score=out.get("score"),
+    )
+
+
+@router.post("/resume", response_model=QuizResumeResponse)
+def quiz_resume(body: EmailBody):
+    uid = _user_id_or_404(body.email)
+    out = get_resumable_attempt(uid)
+    return QuizResumeResponse(
+        ok=out.ok,
+        has_resumable_attempt=out.has_resumable_attempt,
+        attempt_id=out.attempt_id,
+        attempt_number=out.attempt_number,
+        total_questions=out.total_questions,
+        current_question_index=out.current_question_index,
+        current_question=out.current_question,
+        time_per_question_seconds=out.time_seconds,
+        marks_per_question=out.marks_per_question,
+        source_file_id=out.source_file_id,
+        source_file_name=out.source_file_name,
     )

@@ -19,6 +19,7 @@ from app.models import (
     ContestSetting,
     File,
     QuizAttempt,
+    QuizAttemptProgress,
     QuizQuestion,
     QuizSettings,
     User,
@@ -166,6 +167,70 @@ def _ensure_contest_link_columns(session) -> None:
     )
 
 
+def _ensure_attempt_progress_table(session) -> None:
+    session.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS quiz_attempt_progress (
+              attempt_id BIGINT NOT NULL PRIMARY KEY,
+              user_id BIGINT NOT NULL,
+              file_id BIGINT NULL,
+              status VARCHAR(32) NOT NULL DEFAULT 'IN_PROGRESS',
+              current_question_index BIGINT NOT NULL DEFAULT 0,
+              total_questions BIGINT NOT NULL DEFAULT 0,
+              is_paid TINYINT(1) NOT NULL DEFAULT 1,
+              is_resumable TINYINT(1) NOT NULL DEFAULT 1,
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              CONSTRAINT fk_qap_attempt FOREIGN KEY (attempt_id) REFERENCES attempts(id) ON DELETE CASCADE,
+              CONSTRAINT fk_qap_user FOREIGN KEY (user_id) REFERENCES users(id),
+              CONSTRAINT fk_qap_file FOREIGN KEY (file_id) REFERENCES files(id),
+              INDEX idx_qap_user_resumable (user_id, is_resumable, updated_at),
+              INDEX idx_qap_status (status)
+            )
+            """
+        )
+    )
+
+
+def _sync_attempt_progress(
+    session: Session,
+    *,
+    attempt: QuizAttempt,
+    is_resumable: bool,
+    is_paid: bool = True,
+) -> None:
+    _ensure_attempt_progress_table(session)
+    progress = session.get(QuizAttemptProgress, int(attempt.id))
+    if progress is None:
+        progress = QuizAttemptProgress(
+            attempt_id=int(attempt.id),
+            user_id=int(attempt.user_id),
+            file_id=int(attempt.file_id) if attempt.file_id is not None else None,
+            status=str(attempt.status),
+            current_question_index=int(attempt.current_question_index or 0),
+            total_questions=int(attempt.total_questions or 0),
+            is_paid=bool(is_paid),
+            is_resumable=bool(is_resumable),
+        )
+        session.add(progress)
+        return
+    progress.user_id = int(attempt.user_id)
+    progress.file_id = int(attempt.file_id) if attempt.file_id is not None else None
+    progress.status = str(attempt.status)
+    progress.current_question_index = int(attempt.current_question_index or 0)
+    progress.total_questions = int(attempt.total_questions or 0)
+    progress.is_paid = bool(is_paid)
+    progress.is_resumable = bool(is_resumable)
+
+
+def _resolve_file_name(session: Session, file_id: int | None) -> str | None:
+    if file_id is None:
+        return None
+    f = session.get(File, int(file_id))
+    return str(f.file_name) if f is not None else None
+
+
 @guarded_service("quiz.sync_qbank_files")
 def sync_qbank_files() -> int:
     """Legacy no-op. Question-bank rows are now created via admin upload endpoint."""
@@ -265,9 +330,16 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
             "shortlisted": 0,
             "contest_is_active": False,
             "contest_season_end": None,
+            "has_resumable_attempt": False,
+            "resumable_attempt_id": None,
+            "resume_question_index": None,
+            "resume_total_questions": None,
+            "resume_source_file_id": None,
+            "resume_source_file_name": None,
         }
 
     with session_scope() as session:
+        _ensure_attempt_progress_table(session)
         s = _get_settings_row(session)
         max_a = int(s.max_attempts)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -323,6 +395,21 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
         )
 
         remaining = max(0, max_a - used)
+        resumable = session.execute(
+            select(QuizAttemptProgress)
+            .where(
+                QuizAttemptProgress.user_id == user_id,
+                QuizAttemptProgress.is_paid.is_(True),
+                QuizAttemptProgress.is_resumable.is_(True),
+            )
+            .order_by(QuizAttemptProgress.updated_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        resumable_file_name = (
+            _resolve_file_name(session, int(resumable.file_id))
+            if resumable is not None and resumable.file_id is not None
+            else None
+        )
 
         return {
             "max_attempts": max_a,
@@ -336,6 +423,16 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
             "shortlisted": shortlisted,
             "contest_is_active": contest_is_active,
             "contest_season_end": season_end.isoformat() if season_end else None,
+            "has_resumable_attempt": resumable is not None,
+            "resumable_attempt_id": int(resumable.attempt_id) if resumable is not None else None,
+            "resume_question_index": (
+                int(resumable.current_question_index) if resumable is not None else None
+            ),
+            "resume_total_questions": (
+                int(resumable.total_questions) if resumable is not None else None
+            ),
+            "resume_source_file_id": int(resumable.file_id) if resumable is not None and resumable.file_id is not None else None,
+            "resume_source_file_name": resumable_file_name,
         }
 
 
@@ -666,6 +763,21 @@ class StartAttemptResult:
     error: str | None = None
 
 
+@dataclass
+class ResumeAttemptResult:
+    ok: bool
+    has_resumable_attempt: bool
+    attempt_id: int | None = None
+    attempt_number: int | None = None
+    total_questions: int | None = None
+    current_question_index: int | None = None
+    current_question: dict[str, Any] | None = None
+    time_seconds: int | None = None
+    marks_per_question: int | None = None
+    source_file_id: int | None = None
+    source_file_name: str | None = None
+
+
 @guarded_service("quiz.start_attempt")
 def start_attempt(user_id: int) -> StartAttemptResult:
     if engine() is None:
@@ -681,6 +793,7 @@ def start_attempt(user_id: int) -> StartAttemptResult:
 
     with session_scope() as session:
         _ensure_contest_link_columns(session)
+        _ensure_attempt_progress_table(session)
         settings = _get_settings_row(session)
         time_seconds = int(settings.time_per_question_seconds)
         marks_per_question = int(settings.marks_per_question)
@@ -704,6 +817,21 @@ def start_attempt(user_id: int) -> StartAttemptResult:
         used = int(used or 0)
         if used >= max_a:
             return StartAttemptResult(ok=False, error="No attempts remaining")
+        existing = session.execute(
+            select(QuizAttempt)
+            .where(
+                QuizAttempt.user_id == user_id,
+                QuizAttempt.status == "IN_PROGRESS",
+            )
+            .order_by(QuizAttempt.updated_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if existing is not None:
+            _sync_attempt_progress(session, attempt=existing, is_resumable=True, is_paid=True)
+            return StartAttemptResult(
+                ok=False,
+                error="You already have an incomplete paid attempt. Please resume it.",
+            )
 
         f = pick_random_question_bank_file(session)
         if f is None:
@@ -736,6 +864,7 @@ def start_attempt(user_id: int) -> StartAttemptResult:
         )
         session.add(att)
         session.flush()
+        _sync_attempt_progress(session, attempt=att, is_resumable=True, is_paid=True)
         att_id = int(att.id)
         attempt_number = n
 
@@ -752,6 +881,58 @@ def start_attempt(user_id: int) -> StartAttemptResult:
         source_file_id=source_file_id,
         source_file_name=source_file_name,
     )
+
+
+@guarded_service("quiz.get_resumable_attempt")
+def get_resumable_attempt(user_id: int) -> ResumeAttemptResult:
+    if engine() is None:
+        return ResumeAttemptResult(ok=True, has_resumable_attempt=False)
+    with session_scope() as session:
+        _ensure_attempt_progress_table(session)
+        settings = _get_settings_row(session)
+        row = session.execute(
+            select(QuizAttempt)
+            .where(
+                QuizAttempt.user_id == user_id,
+                QuizAttempt.status == "IN_PROGRESS",
+            )
+            .order_by(QuizAttempt.updated_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if row is None:
+            return ResumeAttemptResult(ok=True, has_resumable_attempt=False)
+        data = row.quiz_json
+        if not isinstance(data, dict):
+            _sync_attempt_progress(session, attempt=row, is_resumable=False, is_paid=True)
+            return ResumeAttemptResult(ok=True, has_resumable_attempt=False)
+        qs = data.get("questions")
+        if not isinstance(qs, list) or not qs:
+            _sync_attempt_progress(session, attempt=row, is_resumable=False, is_paid=True)
+            return ResumeAttemptResult(ok=True, has_resumable_attempt=False)
+        idx = int(row.current_question_index or 0)
+        idx = max(0, min(idx, len(qs) - 1))
+        q = qs[idx]
+        _sync_attempt_progress(session, attempt=row, is_resumable=True, is_paid=True)
+        source_file_name = _resolve_file_name(
+            session, int(row.file_id) if row.file_id is not None else None
+        )
+        return ResumeAttemptResult(
+            ok=True,
+            has_resumable_attempt=True,
+            attempt_id=int(row.id),
+            attempt_number=int(row.attempt_number),
+            total_questions=len(qs),
+            current_question_index=idx,
+            current_question={
+                "index": idx,
+                "question": q["question"],
+                "options": q["options"],
+            },
+            time_seconds=int(settings.time_per_question_seconds),
+            marks_per_question=int(settings.marks_per_question),
+            source_file_id=int(row.file_id) if row.file_id is not None else None,
+            source_file_name=source_file_name,
+        )
 
 
 def _get_attempt_for_user(
@@ -835,6 +1016,7 @@ def submit_answer(
             att.status = "FAILED_WRONG"
             att.score = _finalize_score(int(att.correct_answers or 0), settings)
             att.current_question_index = question_index
+            _sync_attempt_progress(session, attempt=att, is_resumable=False, is_paid=True)
             session.flush()
             return {
                 "ok": True,
@@ -852,6 +1034,7 @@ def submit_answer(
             att.status = "SUCCESS"
             att.score = _finalize_score(int(att.correct_answers), settings)
             att.current_question_index = question_index
+            _sync_attempt_progress(session, attempt=att, is_resumable=False, is_paid=True)
             session.flush()
             return {
                 "ok": True,
@@ -864,6 +1047,7 @@ def submit_answer(
             }
 
         att.current_question_index = question_index + 1
+        _sync_attempt_progress(session, attempt=att, is_resumable=True, is_paid=True)
         session.flush()
 
         nq = qs[question_index + 1]
@@ -895,6 +1079,7 @@ def timeout_attempt(attempt_id: int, user_id: int) -> dict[str, Any]:
         settings = _get_settings_row(session)
         att.status = "FAILED_TIMEOUT"
         att.score = _finalize_score(int(att.correct_answers or 0), settings)
+        _sync_attempt_progress(session, attempt=att, is_resumable=False, is_paid=True)
         session.flush()
         return {
             "ok": True,

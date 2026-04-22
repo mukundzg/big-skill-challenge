@@ -227,6 +227,29 @@ class AttemptQuestionTiming(Base):
     shown_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
 
 
+class QuizAttemptProgress(Base):
+    __tablename__ = "quiz_attempt_progress"
+
+    attempt_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("attempts.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
+    file_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("files.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'IN_PROGRESS'"))
+    current_question_index: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    total_questions: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    is_paid: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("1"))
+    is_resumable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("1"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+    )
+
+
 class ContestSetting(Base):
     __tablename__ = "contest_settings"
 

@@ -14,6 +14,7 @@ from typing import Any
 
 import bcrypt
 import jwt
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from sqlalchemy import func, select, text
 
 from app.core.service_guard import guarded_service
@@ -125,7 +126,12 @@ def verify_bootstrap_code(code: str) -> str:
 
 @guarded_service("admin.decode_token")
 def decode_token(raw: str) -> dict[str, Any]:
-    return jwt.decode(raw, _jwt_secret(), algorithms=["HS256"])
+    try:
+        return jwt.decode(raw, _jwt_secret(), algorithms=["HS256"])
+    except ExpiredSignatureError as e:
+        raise ValueError("Token expired") from e
+    except InvalidTokenError as e:
+        raise ValueError("Invalid token") from e
 
 
 def _random_password() -> str:
