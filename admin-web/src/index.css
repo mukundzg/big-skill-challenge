@@ -7,7 +7,10 @@ body {
   margin: 0;
   min-height: 100%;
   width: 100%;
-  background: #0f172a;
+  font-family: 'Inter', system-ui, sans-serif;
+  background: linear-gradient(135deg, #1e3c72, #2a5298, #067c76);
+  background-attachment: fixed;
+  color: #ffffff;
 }
 
 #root {
