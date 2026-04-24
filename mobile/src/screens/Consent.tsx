@@ -154,9 +154,18 @@ export function Consent({ navigation }: Props) {
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top }]}>
         <View style={styles.headerContent}>
-          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+          {/* <Pressable
+            onPress={() => {
+              if (navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate('SignIn', { fromUserNotFound: false });
+              }
+            }}
+            style={styles.backBtn}
+          >
             <Text style={styles.backBtnText}>←</Text>
-          </Pressable>
+          </Pressable> */}
           <Image
             source={require('../../assets/images/prize-hero.png')}
             style={styles.logo}

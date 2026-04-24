@@ -275,12 +275,12 @@ export function SignInScreen({ navigation }: Props) {
               autoCapitalize="none"
               autoComplete="email"
               autoCorrect={false}
-              editable={!loading && !isOtpSent}
+              editable={!loading && (activeTab === 'login' || !isOtpSent)}
               keyboardType="email-address"
               onChangeText={setEmail}
               placeholder="your@email.com"
               placeholderTextColor="rgba(255,255,255,0.35)"
-              style={[styles.input, isOtpSent && styles.inputDisabled]}
+              style={[styles.input, (activeTab === 'register' && isOtpSent) && styles.inputDisabled]}
               value={email}
             />
           </View>
@@ -334,7 +334,7 @@ export function SignInScreen({ navigation }: Props) {
           )}
 
 
-          {activeTab === 'register' && (
+          {activeTab === 'register' && !isOtpSent && (
             <>
               <View style={styles.sep}>
                 <Text style={styles.sepLabel}>Confirmations required</Text>
