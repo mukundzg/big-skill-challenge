@@ -10,7 +10,7 @@ import {
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { submitQuizAnswer, submitQuizTimeout } from '../api/quiz';
+import { fetchQuizQuestion, submitQuizAnswer, submitQuizTimeout } from '../api/quiz';
 import { loadSession } from '../auth/session';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -39,6 +39,14 @@ export function QuizPlayScreen({ navigation, route }: Props) {
   useEffect(() => {
     loadSession().then((s) => setEmail(s?.email ?? null));
   }, []);
+
+  useEffect(() => {
+    const em = email;
+    if (!em) return;
+    void fetchQuizQuestion(em, attemptId, questionIndex).catch(() => {
+      /* submit_answer still records as fallback */
+    });
+  }, [attemptId, email, questionIndex]);
 
   const goHome = useCallback(() => {
     navigation.reset({ index: 0, routes: [{ name: 'Dashboard' }] });

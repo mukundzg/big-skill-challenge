@@ -153,9 +153,45 @@ export async function startQuizAttempt(email: string): Promise<QuizStartResult> 
   }
 }
 
+export async function markQuizPaymentSuccess(email: string): Promise<{ ok: boolean }> {
+  try {
+    return await apiPost<{ email: string }, { ok: boolean }>('/quiz/payment-success', { email });
+  } catch (e) {
+    if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
+    throw e;
+  }
+}
+
 export async function fetchQuizResume(email: string): Promise<QuizResumeResult> {
   try {
     return await apiPost<{ email: string }, QuizResumeResult>('/quiz/resume', { email });
+  } catch (e) {
+    if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
+    throw e;
+  }
+}
+
+export type QuizQuestionFetchResult = {
+  index: number;
+  question: string;
+  options: string[];
+  time_per_question_seconds?: number;
+};
+
+export async function fetchQuizQuestion(
+  email: string,
+  attemptId: number,
+  questionIndex: number,
+): Promise<QuizQuestionFetchResult> {
+  try {
+    return await apiPost<
+      { email: string; attempt_id: number; question_index: number },
+      QuizQuestionFetchResult
+    >('/quiz/question', {
+      email,
+      attempt_id: attemptId,
+      question_index: questionIndex,
+    });
   } catch (e) {
     if (e instanceof ApiError) throw AuthApiError.fromApiError(e);
     throw e;

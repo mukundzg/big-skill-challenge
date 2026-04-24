@@ -145,8 +145,12 @@ export function DashboardScreen({ navigation }: Props) {
     }
     try {
       const res = await fetchQuizResume(email);
-      if (!res.ok || !res.has_resumable_attempt || !res.current_question || res.attempt_id == null) {
+      if (!res.ok || !res.has_resumable_attempt) {
         showAlert('Nothing to resume', 'No incomplete paid attempts were found.');
+        return;
+      }
+      if (res.attempt_id == null || !res.current_question) {
+        navigation.navigate('QuizPrepare', { email });
         return;
       }
       navigation.navigate('QuizPlay', {
@@ -185,6 +189,9 @@ export function DashboardScreen({ navigation }: Props) {
       }
       if (e instanceof AuthApiError) {
         setError(e.message);
+        showAlert('Sign out failed', e.message);
+      } else {
+        showAlert('Sign out failed', e instanceof Error ? e.message : 'Please try again.');
       }
     } finally {
       setLogoutBusy(false);
@@ -468,6 +475,7 @@ export function DashboardScreen({ navigation }: Props) {
           )}
         </Pressable>
       </View>
+      {error != null && <Text style={styles.error}>{error}</Text>}
     </View>
   );
 

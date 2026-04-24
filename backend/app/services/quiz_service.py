@@ -193,6 +193,63 @@ def _ensure_attempt_progress_table(session) -> None:
     )
 
 
+def _ensure_payment_credit_table(session) -> None:
+    session.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS quiz_payment_credits (
+              id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+              user_id BIGINT NOT NULL,
+              consumed TINYINT(1) NOT NULL DEFAULT 0,
+              consumed_attempt_id BIGINT NULL,
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              CONSTRAINT fk_qpc_user FOREIGN KEY (user_id) REFERENCES users(id),
+              CONSTRAINT fk_qpc_attempt FOREIGN KEY (consumed_attempt_id) REFERENCES attempts(id) ON DELETE SET NULL,
+              INDEX idx_qpc_user_consumed (user_id, consumed, created_at)
+            )
+            """
+        )
+    )
+
+
+def _has_quiz_play_started(session: Session, attempt_id: int) -> bool:
+    """True once any question for this attempt was shown (client opened quiz play)."""
+    n = session.execute(
+        select(func.count())
+        .select_from(AttemptQuestionTiming)
+        .where(AttemptQuestionTiming.attempt_id == int(attempt_id))
+    ).scalar_one()
+    return int(n or 0) > 0
+
+
+def _abandon_in_progress_if_quiz_started(session: Session, att: QuizAttempt) -> None:
+    """Consume any in-progress attempt once quiz has been started (attempt exists)."""
+    if att.status != "IN_PROGRESS":
+        return
+    settings = _get_settings_row(session)
+    att.status = "FAILED_ABANDONED"
+    att.score = _finalize_score(int(att.correct_answers or 0), settings)
+    _sync_attempt_progress(session, attempt=att, is_resumable=False, is_paid=True)
+
+
+def _record_question_shown(session: Session, attempt_id: int, question_index: int) -> None:
+    existing = session.execute(
+        select(AttemptQuestionTiming).where(
+            AttemptQuestionTiming.attempt_id == attempt_id,
+            AttemptQuestionTiming.question_index == question_index,
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        session.add(
+            AttemptQuestionTiming(
+                attempt_id=attempt_id,
+                question_index=question_index,
+                shown_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+
+
 def _sync_attempt_progress(
     session: Session,
     *,
@@ -229,6 +286,96 @@ def _resolve_file_name(session: Session, file_id: int | None) -> str | None:
         return None
     f = session.get(File, int(file_id))
     return str(f.file_name) if f is not None else None
+
+
+def _pending_paid_entry_credits(session: Session, user_id: int) -> int:
+    _ensure_payment_credit_table(session)
+    n = session.execute(
+        text(
+            """
+            SELECT COUNT(*)
+            FROM quiz_payment_credits
+            WHERE user_id = :user_id
+              AND consumed = 0
+            """
+        ),
+        {"user_id": int(user_id)},
+    ).scalar()
+    return int(n or 0)
+
+
+def _add_payment_credit(session: Session, user_id: int) -> None:
+    _ensure_payment_credit_table(session)
+    session.execute(
+        text(
+            """
+            INSERT INTO quiz_payment_credits (user_id, consumed)
+            VALUES (:user_id, 0)
+            """
+        ),
+        {"user_id": int(user_id)},
+    )
+
+
+def _consume_one_payment_credit(session: Session, user_id: int, attempt_id: int) -> bool:
+    _ensure_payment_credit_table(session)
+    row = session.execute(
+        text(
+            """
+            SELECT id
+            FROM quiz_payment_credits
+            WHERE user_id = :user_id
+              AND consumed = 0
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """
+        ),
+        {"user_id": int(user_id)},
+    ).scalar()
+    if row is None:
+        return False
+    session.execute(
+        text(
+            """
+            UPDATE quiz_payment_credits
+            SET consumed = 1,
+                consumed_attempt_id = :attempt_id
+            WHERE id = :id
+            """
+        ),
+        {"id": int(row), "attempt_id": int(attempt_id)},
+    )
+    return True
+
+
+@guarded_service("quiz.record_payment_success")
+def record_payment_success(user_id: int) -> bool:
+    """Validate user/contest window and indicate a payment credit was created."""
+    if engine() is None:
+        return False
+    with session_scope() as session:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        active_contest = session.execute(
+            select(ContestSetting).where(
+                ContestSetting.is_active.is_(True),
+                ContestSetting.is_deleted.is_(False),
+                ContestSetting.season_start.is_not(None),
+                ContestSetting.season_end.is_not(None),
+                ContestSetting.season_start <= now,
+                ContestSetting.season_end >= now,
+            )
+        ).scalar_one_or_none()
+        if active_contest is None:
+            return False
+        # Ensure user still has room for at least one more started attempt.
+        settings = _get_settings_row(session)
+        used = session.execute(
+            select(func.count()).select_from(QuizAttempt).where(QuizAttempt.user_id == user_id)
+        ).scalar_one()
+        if int(used or 0) >= int(settings.max_attempts):
+            return False
+        _add_payment_credit(session, user_id)
+        return True
 
 
 @guarded_service("quiz.sync_qbank_files")
@@ -405,6 +552,14 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
             .order_by(QuizAttemptProgress.updated_at.desc())
             .limit(1)
         ).scalar_one_or_none()
+        if resumable is not None:
+            att_row = session.get(QuizAttempt, int(resumable.attempt_id))
+            if att_row is not None:
+                _abandon_in_progress_if_quiz_started(session, att_row)
+                session.flush()
+                if att_row.status != "IN_PROGRESS":
+                    resumable = None
+        has_pending_payment_credit = _pending_paid_entry_credits(session, user_id) > 0
         resumable_file_name = (
             _resolve_file_name(session, int(resumable.file_id))
             if resumable is not None and resumable.file_id is not None
@@ -423,7 +578,7 @@ def get_dashboard_stats(user_id: int) -> dict[str, Any]:
             "shortlisted": shortlisted,
             "contest_is_active": contest_is_active,
             "contest_season_end": season_end.isoformat() if season_end else None,
-            "has_resumable_attempt": resumable is not None,
+            "has_resumable_attempt": resumable is not None or has_pending_payment_credit,
             "resumable_attempt_id": int(resumable.attempt_id) if resumable is not None else None,
             "resume_question_index": (
                 int(resumable.current_question_index) if resumable is not None else None
@@ -648,7 +803,7 @@ def list_user_entries(user_id: int, *, limit: int = 30) -> list[dict[str, Any]]:
             label = "Shortlisted"
         elif status == "SUCCESS":
             label = "Submitted" if r.get("submission_id") else "Quiz Passed"
-        elif status in {"FAILED_WRONG", "FAILED_TIMEOUT"}:
+        elif status in {"FAILED_WRONG", "FAILED_TIMEOUT", "FAILED_ABANDONED"}:
             label = "Quiz Failed"
         elif status == "IN_PROGRESS":
             label = "Incomplete"
@@ -827,11 +982,16 @@ def start_attempt(user_id: int) -> StartAttemptResult:
             .limit(1)
         ).scalar_one_or_none()
         if existing is not None:
-            _sync_attempt_progress(session, attempt=existing, is_resumable=True, is_paid=True)
-            return StartAttemptResult(
-                ok=False,
-                error="You already have an incomplete paid attempt. Please resume it.",
-            )
+            _abandon_in_progress_if_quiz_started(session, existing)
+            session.flush()
+            if existing.status == "IN_PROGRESS":
+                _sync_attempt_progress(session, attempt=existing, is_resumable=True, is_paid=True)
+                return StartAttemptResult(
+                    ok=False,
+                    error="You already have an incomplete paid attempt. Please resume it.",
+                )
+        if _pending_paid_entry_credits(session, user_id) <= 0:
+            return StartAttemptResult(ok=False, error="No paid entry credit available")
 
         f = pick_random_question_bank_file(session)
         if f is None:
@@ -864,6 +1024,7 @@ def start_attempt(user_id: int) -> StartAttemptResult:
         )
         session.add(att)
         session.flush()
+        _consume_one_payment_credit(session, user_id, int(att.id))
         _sync_attempt_progress(session, attempt=att, is_resumable=True, is_paid=True)
         att_id = int(att.id)
         attempt_number = n
@@ -900,6 +1061,14 @@ def get_resumable_attempt(user_id: int) -> ResumeAttemptResult:
             .limit(1)
         ).scalar_one_or_none()
         if row is None:
+            if _pending_paid_entry_credits(session, user_id) > 0:
+                return ResumeAttemptResult(ok=True, has_resumable_attempt=True)
+            return ResumeAttemptResult(ok=True, has_resumable_attempt=False)
+        _abandon_in_progress_if_quiz_started(session, row)
+        session.flush()
+        if row.status != "IN_PROGRESS":
+            if _pending_paid_entry_credits(session, user_id) > 0:
+                return ResumeAttemptResult(ok=True, has_resumable_attempt=True)
             return ResumeAttemptResult(ok=True, has_resumable_attempt=False)
         data = row.quiz_json
         if not isinstance(data, dict):
@@ -961,20 +1130,7 @@ def get_question_for_attempt(
         if not isinstance(qs, list) or question_index < 0 or question_index >= len(qs):
             return None
         q = qs[question_index]
-        existing = session.execute(
-            select(AttemptQuestionTiming).where(
-                AttemptQuestionTiming.attempt_id == attempt_id,
-                AttemptQuestionTiming.question_index == question_index,
-            )
-        ).scalar_one_or_none()
-        if existing is None:
-            session.add(
-                AttemptQuestionTiming(
-                    attempt_id=attempt_id,
-                    question_index=question_index,
-                    shown_at=datetime.now(timezone.utc).replace(tzinfo=None),
-                )
-            )
+        _record_question_shown(session, attempt_id, question_index)
         return {
             "index": question_index,
             "question": q["question"],
@@ -1006,6 +1162,8 @@ def submit_answer(
         qs = data.get("questions")
         if not isinstance(qs, list) or question_index < 0 or question_index >= len(qs):
             return {"ok": False, "error": "bad_question"}
+
+        _record_question_shown(session, attempt_id, question_index)
 
         q = qs[question_index]
         correct_idx = int(q.get("correct_index", -1))

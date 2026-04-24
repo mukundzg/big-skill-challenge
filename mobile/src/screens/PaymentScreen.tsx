@@ -18,6 +18,8 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { confirmAsync } from '../utils/dialog';
 import { isLoggedIn, loadSession } from '../auth/session';
+import { AuthApiError } from '../api/auth';
+import { markQuizPaymentSuccess } from '../api/quiz';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -65,9 +67,24 @@ export function PaymentScreen({ navigation }: Props) {
 		})();
 	}, [navigation]);
 
-	const handlePay = () => {
-		setIsSuccess(true);
-	};
+	const handlePay = useCallback(async () => {
+		if (!email) return;
+		setError(null);
+		try {
+			const res = await markQuizPaymentSuccess(email);
+			if (!res.ok) {
+				setError('Payment could not be confirmed. Please try again.');
+				return;
+			}
+			setIsSuccess(true);
+		} catch (e) {
+			if (e instanceof AuthApiError) {
+				setError(e.message);
+			} else {
+				setError(e instanceof Error ? e.message : 'Payment could not be confirmed.');
+			}
+		}
+	}, [email]);
 
 	const handleStartQuiz = useCallback(async () => {
 		if (!email) return;
@@ -333,7 +350,7 @@ export function PaymentScreen({ navigation }: Props) {
 						<View style={styles.recoveryNotice}>
 							<Text style={styles.recoveryIcon}>⚠️</Text>
 							<Text style={styles.recoveryText}>
-								<Text style={{ fontWeight: '700' }}>Session recovery:</Text> If payment succeeds but your session is interrupted, your entry credit is preserved and can be resumed within the competition window.
+								<Text style={{ fontWeight: '700' }}>Session recovery:</Text> If payment succeeds but you never open the quiz, your entry credit is preserved and you can resume within the competition window. Once the quiz has started, leaving the app uses that attempt.
 							</Text>
 						</View>
 
