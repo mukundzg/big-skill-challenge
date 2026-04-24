@@ -24,6 +24,7 @@ from app.services.quiz_service import (
     list_user_entries,
     get_settings,
     get_resumable_attempt,
+    record_payment_success,
     start_attempt,
     submit_answer,
     timeout_attempt,
@@ -89,6 +90,18 @@ def quiz_shortlist_result(body: EmailBody):
 @router.get("/settings")
 def quiz_settings_public():
     return get_settings()
+
+
+@router.post("/payment-success")
+def quiz_payment_success(body: EmailBody, request: Request):
+    uid = _user_id_or_404(body.email)
+    ok = record_payment_success(uid)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Cannot accept payment for an inactive contest")
+    meta = request_context(request)
+    meta["email"] = normalize_email(body.email)
+    record(AuditAction.QUIZ_PAYMENT_SUCCESS, user_id=uid, metadata=meta)
+    return {"ok": True}
 
 
 @router.post("/start", response_model=QuizStartResponse)

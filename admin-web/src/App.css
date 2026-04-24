@@ -504,6 +504,11 @@
   color: #fef08a;
 }
 
+.badge.status-FAILED_ABANDONED {
+  background: #4c1d95;
+  color: #e9d5ff;
+}
+
 .badge.status-IN_PROGRESS {
   background: #1e3a5f;
   color: #bfdbfe;

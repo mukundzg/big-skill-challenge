@@ -9,6 +9,7 @@ class AuditAction:
     LOGIN = "login"
     LOGOUT = "logout"
     CONSENT_ACCEPTED = "consent_accepted"
+    QUIZ_PAYMENT_SUCCESS = "quiz_payment_success"
     QUIZ_ATTEMPT_STARTED = "quiz_attempt_started"
     # All questions answered correctly (attempt succeeded).
     QUIZ_ATTEMPT_FINISHED = "quiz_attempt_finished"
