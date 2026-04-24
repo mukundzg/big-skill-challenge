@@ -212,7 +212,10 @@ export function HomeScreen({ navigation }: Props) {
 
         {/* CTA */}
         <View style={styles.ctaWrap}>
-          <Pressable style={styles.ctaBtn}>
+          <Pressable
+            style={styles.ctaBtn}
+            onPress={() => navigation.navigate("SignIn", { fromUserNotFound: false })}
+          >
             <LinearGradient colors={['#F59E0B', '#EA580C']} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={styles.ctaGradient}>
               <Text style={styles.ctaText}>ENTER NOW — A$2.99</Text>
             </LinearGradient>
